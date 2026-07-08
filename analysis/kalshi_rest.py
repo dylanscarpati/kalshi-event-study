@@ -48,14 +48,17 @@ class ApiResponse:
 def get(session: requests.Session, path: str, params: dict | None = None) -> ApiResponse:
     """GET a public market-data endpoint.
 
-    No retries by design: this backs a hand-run probe, so failures should
-    be loud and immediate. Resilience (backoff, reconnect) belongs to the
+    Returns an ApiResponse for every completed HTTP exchange, success or
+    error status alike, so the caller can record the observation before
+    deciding what to do with it. Transport failures (timeout, DNS,
+    connection reset) still raise requests.RequestException. No retries
+    by design: this backs a hand-run probe, so failures should be loud
+    and immediate. Resilience (backoff, reconnect) belongs to the
     collector, not here.
     """
     response = session.get(BASE_URL + path, params=params, timeout=10)
     recv_wall_ns = time.time_ns()
     recv_mono_ns = time.monotonic_ns()
-    response.raise_for_status()
     return ApiResponse(
         path=path,
         params=params,

@@ -2,8 +2,9 @@
 
 Discovers the nearest open event in a series (never constructs event
 tickers by hand -- the naming convention is observed, not contracted),
-prints its strike ladder and the consolidated YES top of book, and appends
-every raw HTTP response verbatim to a JSONL tape under data/snapshots/.
+prints its strike ladder and the consolidated YES top of book, and tapes
+every raw HTTP response verbatim, on receipt and before parsing, to a
+per-run JSONL file under data/snapshots/.
 
 Usage: python analysis/snapshot_probe.py [--series KXCPI] [--depth 5]
 """
@@ -32,26 +33,62 @@ def fmt(value: int | float | None) -> str:
     return str(value)
 
 
-def append_jsonl(out_dir: Path, run_id: str, responses: list[ApiResponse]) -> Path:
-    """One line per HTTP response. body_text is the verbatim response text,
-    never re-encoded: re-dumping parsed JSON would alter key order and
-    whitespace, and the raw record is the one thing we never modify."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{time.strftime('%Y-%m-%d', time.gmtime())}.jsonl"
-    with out_path.open("a", encoding="utf-8") as f:
-        for r in responses:
-            record = {
-                "schema": SCHEMA,
-                "probe_run_id": run_id,
-                "recv_wall_ns": r.recv_wall_ns,
-                "recv_mono_ns": r.recv_mono_ns,
-                "elapsed_ms": r.elapsed_ms,
-                "request": {"path": r.path, "params": r.params},
-                "http_status": r.http_status,
-                "body_text": r.body_text,
-            }
+class Tape:
+    """Append-only JSONL tape, one file per run so concurrent probes can
+    never interleave. Each record is the verbatim response text, never
+    re-encoded (re-dumping parsed JSON would alter key order and
+    whitespace), written the moment the response arrives -- capture
+    first, interpret later.
+    """
+
+    def __init__(self, out_dir: Path, run_id: str) -> None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        self.path = out_dir / f"{run_id}.jsonl"
+        self.run_id = run_id
+        self.count = 0
+
+    def append(self, r: ApiResponse) -> None:
+        record = {
+            "schema": SCHEMA,
+            "probe_run_id": self.run_id,
+            "recv_wall_ns": r.recv_wall_ns,
+            "recv_mono_ns": r.recv_mono_ns,
+            "elapsed_ms": r.elapsed_ms,
+            "request": {"path": r.path, "params": r.params},
+            "http_status": r.http_status,
+            "body_text": r.body_text,
+        }
+        with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, separators=(",", ":")) + "\n")
-    return out_path
+        self.count += 1
+
+
+def taped_get(session: requests.Session, tape: Tape, path: str, params: dict) -> ApiResponse:
+    """Fetch, tape the exchange unconditionally, then fail loudly on a
+    non-200 -- the observation is preserved either way."""
+    resp = get(session, path, params)
+    tape.append(resp)
+    if resp.http_status != 200:
+        print(f"HTTP {resp.http_status} from {path} (exchange recorded to tape)", file=sys.stderr)
+        sys.exit(1)
+    return resp
+
+
+def fetch_open_markets(session: requests.Session, tape: Tape, series: str) -> list:
+    """Follow the pagination cursor until exhausted; an empty cursor marks
+    the last page. Stopping early would silently truncate the ladder."""
+    markets = []
+    cursor = ""
+    while True:
+        params = {"series_ticker": series, "status": "open", "limit": 1000}
+        if cursor:
+            params["cursor"] = cursor
+        resp = taped_get(session, tape, "/markets", params)
+        body = resp.json()
+        markets.extend(parse_market(m) for m in body["markets"])
+        cursor = body.get("cursor", "")
+        if not cursor:
+            return markets
 
 
 def main() -> int:
@@ -62,16 +99,10 @@ def main() -> int:
     args = parser.parse_args()
 
     run_id = f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{uuid.uuid4().hex[:8]}"
-    responses: list[ApiResponse] = []
+    tape = Tape(args.out_dir, run_id)
 
     with requests.Session() as session:
-        markets_resp = get(
-            session,
-            "/markets",
-            {"series_ticker": args.series, "status": "open", "limit": 1000},
-        )
-        responses.append(markets_resp)
-        markets = [parse_market(m) for m in markets_resp.json()["markets"]]
+        markets = fetch_open_markets(session, tape, args.series)
         if not markets:
             print(f"no open markets for series {args.series!r}", file=sys.stderr)
             return 2
@@ -95,8 +126,9 @@ def main() -> int:
             )
 
         target = max(ladder, key=lambda m: m.volume)
-        book_resp = get(session, f"/markets/{target.ticker}/orderbook", {"depth": args.depth})
-        responses.append(book_resp)
+        book_resp = taped_get(
+            session, tape, f"/markets/{target.ticker}/orderbook", {"depth": args.depth}
+        )
         top = consolidate_yes_top(book_resp.json())
 
         print()
@@ -109,8 +141,7 @@ def main() -> int:
         print(f"  market-object quotes: bid {fmt(target.yes_bid_cents)} / ask {fmt(target.yes_ask_cents)}")
         print(f"  resting depth: {top.depth_yes} YES / {top.depth_no} NO contracts")
 
-    out_path = append_jsonl(args.out_dir, run_id, responses)
-    print(f"\nappended {len(responses)} raw records to {out_path} (run {run_id})")
+    print(f"\ntaped {tape.count} raw records to {tape.path} (run {run_id})")
     return 0
 
 
