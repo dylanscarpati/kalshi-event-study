@@ -40,6 +40,7 @@ class ApiResponse:
     recv_wall_ns: int
     recv_mono_ns: int
     elapsed_ms: float
+    server_date: str | None = None
 
     def json(self) -> dict:
         return json.loads(self.body_text)
@@ -67,6 +68,7 @@ def get(session: requests.Session, path: str, params: dict | None = None) -> Api
         recv_wall_ns=recv_wall_ns,
         recv_mono_ns=recv_mono_ns,
         elapsed_ms=response.elapsed.total_seconds() * 1000.0,
+        server_date=response.headers.get("Date"),
     )
 
 

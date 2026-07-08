@@ -6,23 +6,26 @@ prints its strike ladder and the consolidated YES top of book, and tapes
 every raw HTTP response verbatim, on receipt and before parsing, to a
 per-run JSONL file under data/snapshots/.
 
+Probe-class instrument: hand-run, nothing perishable, so failures are
+loud and immediate (no retries). The capture instruments are the ones
+that must survive; see release_poller.py.
+
 Usage: python analysis/snapshot_probe.py [--series KXCPI] [--depth 5]
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import sys
-import time
-import uuid
 from pathlib import Path
 
 import requests
 
-from kalshi_rest import ApiResponse, consolidate_yes_top, get, parse_market
+from kalshi_rest import consolidate_yes_top, get
+from market_discovery import event_ladder, fetch_open_markets, nearest_event, require_ok
+from tape import Tape, new_run_id, rest_record
 
-SCHEMA = "snapshot_probe/1"
+SCHEMA = "snapshot_probe/2"
 
 
 def fmt(value: int | float | None) -> str:
@@ -33,64 +36,6 @@ def fmt(value: int | float | None) -> str:
     return str(value)
 
 
-class Tape:
-    """Append-only JSONL tape, one file per run so concurrent probes can
-    never interleave. Each record is the verbatim response text, never
-    re-encoded (re-dumping parsed JSON would alter key order and
-    whitespace), written the moment the response arrives -- capture
-    first, interpret later.
-    """
-
-    def __init__(self, out_dir: Path, run_id: str) -> None:
-        out_dir.mkdir(parents=True, exist_ok=True)
-        self.path = out_dir / f"{run_id}.jsonl"
-        self.run_id = run_id
-        self.count = 0
-
-    def append(self, r: ApiResponse) -> None:
-        record = {
-            "schema": SCHEMA,
-            "probe_run_id": self.run_id,
-            "recv_wall_ns": r.recv_wall_ns,
-            "recv_mono_ns": r.recv_mono_ns,
-            "elapsed_ms": r.elapsed_ms,
-            "request": {"path": r.path, "params": r.params},
-            "http_status": r.http_status,
-            "body_text": r.body_text,
-        }
-        with self.path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record, separators=(",", ":")) + "\n")
-        self.count += 1
-
-
-def taped_get(session: requests.Session, tape: Tape, path: str, params: dict) -> ApiResponse:
-    """Fetch, tape the exchange unconditionally, then fail loudly on a
-    non-200 -- the observation is preserved either way."""
-    resp = get(session, path, params)
-    tape.append(resp)
-    if resp.http_status != 200:
-        print(f"HTTP {resp.http_status} from {path} (exchange recorded to tape)", file=sys.stderr)
-        sys.exit(1)
-    return resp
-
-
-def fetch_open_markets(session: requests.Session, tape: Tape, series: str) -> list:
-    """Follow the pagination cursor until exhausted; an empty cursor marks
-    the last page. Stopping early would silently truncate the ladder."""
-    markets = []
-    cursor = ""
-    while True:
-        params = {"series_ticker": series, "status": "open", "limit": 1000}
-        if cursor:
-            params["cursor"] = cursor
-        resp = taped_get(session, tape, "/markets", params)
-        body = resp.json()
-        markets.extend(parse_market(m) for m in body["markets"])
-        cursor = body.get("cursor", "")
-        if not cursor:
-            return markets
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--series", default="KXCPI", help="series ticker to probe")
@@ -98,25 +43,21 @@ def main() -> int:
     parser.add_argument("--out-dir", type=Path, default=Path("data/snapshots"))
     args = parser.parse_args()
 
-    run_id = f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{uuid.uuid4().hex[:8]}"
-    tape = Tape(args.out_dir, run_id)
+    run_id = new_run_id()
+    with Tape(args.out_dir / f"{run_id}.jsonl") as tape, requests.Session() as session:
+        on_response = lambda r: tape.append(rest_record(SCHEMA, run_id, r))
 
-    with requests.Session() as session:
-        markets = fetch_open_markets(session, tape, args.series)
+        markets = fetch_open_markets(session, args.series, on_response)
         if not markets:
             print(f"no open markets for series {args.series!r}", file=sys.stderr)
             return 2
 
-        # The event whose markets close soonest is the next scheduled release.
-        nearest = min(markets, key=lambda m: m.close_time)
-        ladder = sorted(
-            (m for m in markets if m.event_ticker == nearest.event_ticker),
-            key=lambda m: m.floor_strike if m.floor_strike is not None else float("-inf"),
-        )
+        event = nearest_event(markets)
+        ladder = event_ladder(markets, event)
 
         print(
             f"series {args.series}: {len(markets)} open markets; "
-            f"nearest event {nearest.event_ticker} closes {nearest.close_time}"
+            f"nearest event {event} closes {ladder[0].close_time}"
         )
         print(f"{'ticker':<22} {'bid':>4} {'ask':>4} {'mid':>6} {'volume':>12}")
         for m in ladder:
@@ -126,9 +67,9 @@ def main() -> int:
             )
 
         target = max(ladder, key=lambda m: m.volume)
-        book_resp = taped_get(
-            session, tape, f"/markets/{target.ticker}/orderbook", {"depth": args.depth}
-        )
+        book_resp = get(session, f"/markets/{target.ticker}/orderbook", {"depth": args.depth})
+        on_response(book_resp)
+        require_ok(book_resp)
         top = consolidate_yes_top(book_resp.json())
 
         print()
@@ -141,7 +82,7 @@ def main() -> int:
         print(f"  market-object quotes: bid {fmt(target.yes_bid_cents)} / ask {fmt(target.yes_ask_cents)}")
         print(f"  resting depth: {top.depth_yes} YES / {top.depth_no} NO contracts")
 
-    print(f"\ntaped {tape.count} raw records to {tape.path} (run {run_id})")
+        print(f"\ntaped {tape.count} raw records to {tape.path} (run {run_id})")
     return 0
 
 
@@ -150,4 +91,7 @@ if __name__ == "__main__":
         sys.exit(main())
     except requests.RequestException as exc:
         print(f"request failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except RuntimeError as exc:
+        print(f"{exc} (exchange recorded to tape)", file=sys.stderr)
         sys.exit(1)
