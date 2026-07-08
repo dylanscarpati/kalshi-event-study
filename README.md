@@ -11,7 +11,9 @@ An empirical study of price discovery in Kalshi prediction markets around schedu
 
 ## Method
 
-A long-running C++ daemon collects the raw order-book and trade tape over Kalshi's WebSocket API, timestamping every message on receipt with both wall and monotonic clocks. A Python layer aligns events on their scheduled release timestamps and produces event-study price paths, empirical distributions of post-release adjustment times, and calibration curves built from historical settled markets. Uncertainty is quantified with bootstrap confidence intervals, resampled at the event level to respect the correlation between contracts that settle on the same print.
+A long-running C++ daemon will collect the raw order-book and trade tape over Kalshi's WebSocket API, timestamping every message on receipt with both wall and monotonic clocks. A Python layer will align events on their scheduled release timestamps and produce event-study price paths, empirical distributions of post-release adjustment times, and calibration curves built from historical settled markets. Uncertainty will be quantified with bootstrap confidence intervals, resampled at the event level to respect the correlation between contracts that settle on the same print.
+
+What exists today: a REST probe that discovers the nearest open event in a macro series, parses its strike ladder into a consolidated YES order-book view, and appends every raw HTTP response — verbatim, receipt-timestamped on both clocks — to an append-only JSONL tape. The collector and the analysis layer build on the same conventions.
 
 ## Results
 
@@ -21,8 +23,8 @@ Forthcoming. Every figure will state its sample size; null results will be repor
 
 Stated up front, before any results:
 
-- **Latency floor.** Every recorded timestamp is the true event time plus a positive network delay, so measured adjustment times are upper bounds. The delay is measured (RTT logging) and reported, not assumed away.
-- **Clock error.** Wall-clock error is bounded by logged NTP offset estimates; durations are computed on the monotonic clock.
+- **Latency floor.** Every recorded timestamp is the true event time plus a positive network delay, so measured adjustment times are upper bounds. The delay will be measured (RTT logging) and reported, not assumed away.
+- **Clock error.** Wall-clock error will be bounded by logged NTP offset estimates; durations are computed on the monotonic clock.
 - **Small live-capture sample.** Scheduled macro releases arrive roughly monthly per series; the number of live-captured events will be small, and confidence intervals will be wide and honest about it.
 - **Single venue.** Results describe Kalshi, not prediction markets in general.
 - **Liquidity, spreads, and fees.** Wide or one-sided books are an error bar on any mid-price, and any deviation must clear round-trip trading costs before it can be called exploitable rather than merely detectable.
@@ -30,22 +32,34 @@ Stated up front, before any results:
 
 ## Repository layout
 
-| Path         | Contents                                              |
-| ------------ | ----------------------------------------------------- |
-| `collector/` | C++ market-data collector daemon (in progress)        |
-| `analysis/`  | Python analysis layer and data probes                 |
-| `data/`      | Local captures — not tracked, see compliance below    |
+| Path         | Contents                                                  |
+| ------------ | --------------------------------------------------------- |
+| `collector/` | Planned C++ collector daemon (not started yet)             |
+| `analysis/`  | Data probes and API parsing; analysis layer forthcoming    |
+| `data/`      | Local captures — not tracked, see compliance below         |
 
 ## Data and compliance
 
-This project collects market data for research only. No trading, ever. Raw collected data is not redistributed in this repository, per Kalshi's data terms; the collection code lets anyone regenerate the dataset themselves. API credentials live in a local `.env` file and are never committed.
+This project collects market data for research only. No trading, ever. Raw collected data is not redistributed in this repository, per Kalshi's data terms; the collection code lets anyone regenerate the dataset themselves. The market-data endpoints used today require no credentials; the planned collector's API credentials will live in a local `.env` file, which is gitignored from the start.
 
 ## Setup
 
+Windows:
+
 ```
-python -m venv .venv
-.venv/Scripts/python -m pip install -r requirements.txt   # Windows
-.venv/bin/python -m pip install -r requirements.txt       # macOS/Linux
+py -3.12 -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python analysis\snapshot_probe.py    # snapshot one live macro market
+.venv\Scripts\python -m pytest                     # run the tests
+```
+
+macOS/Linux:
+
+```
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python analysis/snapshot_probe.py
+.venv/bin/python -m pytest
 ```
 
 ## License
