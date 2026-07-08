@@ -25,7 +25,6 @@ def _cfg(**kw):
         private_key=kw.get("key"),
         tickers=kw.get("tickers", ["T1"]),
         channels=["orderbook_delta", "trade"],
-        sub_shape=kw.get("sub_shape", "per-market"),
         duration_s=30.0,
         checkpoint_s=0.0,
         out_dir=kw["out_dir"],
@@ -33,14 +32,10 @@ def _cfg(**kw):
     )
 
 
-def test_planned_subscriptions_per_market_vs_shared(tmp_path):
+def test_planned_subscriptions_one_sub_per_channel(tmp_path):
+    # The server merges same-channel subscribes into one sid per connection
+    # (verified live 2026-07-08), so the recorder subscribes each channel once.
     cfg = _cfg(out_dir=tmp_path, tickers=["T1", "T2"])
-    assert planned_subscriptions(cfg) == [
-        ("orderbook_delta", ["T1"]),
-        ("orderbook_delta", ["T2"]),
-        ("trade", ["T1", "T2"]),
-    ]
-    cfg.sub_shape = "shared"
     assert planned_subscriptions(cfg) == [
         ("orderbook_delta", ["T1", "T2"]),
         ("trade", ["T1", "T2"]),

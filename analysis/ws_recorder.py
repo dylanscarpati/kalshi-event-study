@@ -7,10 +7,15 @@ clock-stamped the moment recv() returns and written verbatim before any
 parsing; every outbound command is taped too. Interpretation is a
 replay-time concern (capture first, parse later).
 
-Subscription shape: one orderbook_delta subscription PER MARKET (sequence
-continuity becomes decidable per market, which the RQ2 inclusion rule
-needs) and one shared trade subscription (trades are self-contained
-observations; a lost one is a lost data point, not a corrupted state).
+Subscription shape (verified against the live server 2026-07-08): the
+server keeps ONE subscription per channel per connection -- repeated
+same-channel subscribes are merged into the existing sid and acked with
+"ok", so per-market sequence isolation is impossible on a single
+connection. Each channel is therefore subscribed once with the full
+ticker list. The per-sid envelope chain is a complete loss detector
+(every envelope type, including "ok" responses, consumes a seq value);
+instrument-TIER isolation is achieved by running one recorder process
+per tier -- separate connection, separate sid chain, separate tape.
 A sequence gap triggers a rate-limited get_snapshot; false positives are
 benign -- they just add a snapshot to the tape.
 
@@ -68,7 +73,6 @@ class RecorderConfig:
     private_key: object
     tickers: list[str]
     channels: list[str]
-    sub_shape: str  # "per-market" | "shared"
     duration_s: float
     checkpoint_s: float
     out_dir: Path
@@ -76,13 +80,9 @@ class RecorderConfig:
 
 
 def planned_subscriptions(cfg: RecorderConfig) -> list[tuple[str, list[str]]]:
-    subs: list[tuple[str, list[str]]] = []
-    for channel in cfg.channels:
-        if channel == "orderbook_delta" and cfg.sub_shape == "per-market":
-            subs.extend((channel, [t]) for t in cfg.tickers)
-        else:
-            subs.append((channel, list(cfg.tickers)))
-    return subs
+    # One subscribe per channel, full ticker list: the server merges
+    # same-channel subscribes into one sid anyway (verified live).
+    return [(channel, list(cfg.tickers)) for channel in cfg.channels]
 
 
 def server_offset_s(local_wall_ns: int, date_header: str | None) -> float | None:
@@ -111,7 +111,6 @@ async def record(cfg: RecorderConfig, stop_event: asyncio.Event | None = None) -
         **run_metadata(),
         tickers=cfg.tickers,
         channels=cfg.channels,
-        sub_shape=cfg.sub_shape,
         duration_s=cfg.duration_s,
         checkpoint_s=cfg.checkpoint_s,
     )
@@ -291,7 +290,6 @@ def main() -> int:
     parser.add_argument("--tickers", nargs="+", help="explicit market tickers")
     parser.add_argument("--events", nargs="+", help="record every market of these events")
     parser.add_argument("--channels", default="orderbook_delta,trade")
-    parser.add_argument("--sub-shape", choices=["per-market", "shared"], default="per-market")
     parser.add_argument("--duration-min", type=float, default=60.0)
     parser.add_argument("--until", help="stop at HH:MM Eastern (overrides --duration-min)")
     parser.add_argument("--checkpoint-min", type=float, default=15.0)
@@ -319,12 +317,11 @@ def main() -> int:
         private_key=private_key,
         tickers=tickers,
         channels=[c.strip() for c in args.channels.split(",") if c.strip()],
-        sub_shape=args.sub_shape,
         duration_s=until_to_duration_s(args.until) if args.until else args.duration_min * 60.0,
         checkpoint_s=args.checkpoint_min * 60.0,
         out_dir=args.out_dir,
     )
-    print(f"recording {len(tickers)} markets ({cfg.sub_shape}) for {cfg.duration_s/60:.1f} min")
+    print(f"recording {len(tickers)} markets for {cfg.duration_s/60:.1f} min")
 
     inhibit_sleep()
     try:
