@@ -1,8 +1,10 @@
 .env
-data/
+data/*
+!data/.gitkeep
 *.log
 __pycache__/
 .venv/
 build/
+.pytest_cache/
 .DS_Store
 docs/
