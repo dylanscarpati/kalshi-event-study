@@ -136,6 +136,7 @@ async def record(cfg: RecorderConfig, stop_event: asyncio.Event | None = None) -
                 cfg.url, additional_headers=headers, max_queue=None, open_timeout=15
             ) as ws:
                 connected_at = time.monotonic()
+                auth_failures = 0  # a successful handshake proves the credentials
                 ev("connected", attempt=attempt)
                 gaps.forget_all()  # new connection = new chains
                 pending: dict[int, tuple[str, list[str]]] = {}

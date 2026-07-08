@@ -13,7 +13,7 @@ An empirical study of price discovery in Kalshi prediction markets around schedu
 
 A long-running C++ daemon will collect the raw order-book and trade tape over Kalshi's WebSocket API, timestamping every message on receipt with both wall and monotonic clocks. A Python layer will align events on their scheduled release timestamps and produce event-study price paths, empirical distributions of post-release adjustment times, and calibration curves built from historical settled markets. Uncertainty will be quantified with bootstrap confidence intervals, resampled at the event level to respect the correlation between contracts that settle on the same print.
 
-What exists today: a REST probe that discovers the nearest open event in a macro series, parses its strike ladder into a consolidated YES order-book view, and appends every raw HTTP response — verbatim, receipt-timestamped on both clocks — to an append-only JSONL tape. The collector and the analysis layer build on the same conventions.
+What exists today: a REST probe that discovers the nearest open event in a macro series and prints its consolidated YES order-book view; a release-morning polling instrument (drift-free 1 Hz grid, survives transient failures and rate limiting); a WebSocket recorder that tapes every frame verbatim with sequence-gap detection and automatic reconnect; and a puller that has archived the full settled-market history of the five macro series for the calibration study. Every instrument appends raw, receipt-timestamped (wall + monotonic) records to append-only JSONL tapes. The C++ collector and the analysis layer build on the same conventions.
 
 ## Results
 
@@ -35,7 +35,7 @@ Stated up front, before any results:
 | Path         | Contents                                                  |
 | ------------ | --------------------------------------------------------- |
 | `collector/` | Planned C++ collector daemon (not started yet)             |
-| `analysis/`  | Data probes and API parsing; analysis layer forthcoming    |
+| `analysis/`  | Data probes, capture instruments, API parsing; analysis layer forthcoming |
 | `data/`      | Local captures — not tracked, see compliance below         |
 
 ## Data and compliance
