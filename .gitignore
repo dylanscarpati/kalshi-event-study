@@ -1,4 +1,5 @@
 .env
+*.pem
 data/*
 !data/.gitkeep
 *.log
