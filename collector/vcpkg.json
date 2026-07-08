@@ -1,0 +1,15 @@
+{
+  "name": "kalshi-collector",
+  "version-string": "0.1.0",
+  "dependencies": [
+    {
+      "name": "ixwebsocket",
+      "default-features": false,
+      "features": ["openssl"],
+      "$reason": "one TLS stack for both transport and RSA-PSS signing; the 403s during bring-up were the library's 'Host: host:443' header, not the TLS backend"
+    },
+    "openssl",
+    "nlohmann-json",
+    "doctest"
+  ]
+}
