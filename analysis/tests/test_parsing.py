@@ -8,7 +8,41 @@ from decimal import Decimal
 
 import pytest
 
-from kalshi_rest import consolidate_yes_top, dollars_str_to_cents, parse_market
+import pytest as _pytest
+
+from kalshi_rest import consolidate_yes_top, dollars_str_to_cents, parse_market, parse_settled_row
+
+REAL_SETTLED = {  # /historical/markets, KXCPI-26MAR-T1.3, frozen 2026-07-08
+    "ticker": "KXCPI-26MAR-T1.3",
+    "event_ticker": "KXCPI-26MAR",
+    "status": "finalized",
+    "result": "no",
+    "settlement_value_dollars": "0.0000",
+    "settlement_ts": "2026-04-10T13:06:04.496954Z",
+    "expiration_value": "0.9",
+    "open_time": "2026-03-17T15:00:00Z",
+    "close_time": "2026-04-10T12:25:00Z",
+    "expiration_time": "2026-07-10T13:56:00Z",
+    "floor_strike": 1.3,
+    "strike_type": "greater",
+    "volume_fp": "46415.00",
+}
+
+
+def test_parse_settled_row_real_fixture():
+    row = parse_settled_row(REAL_SETTLED, "KXCPI")
+    assert row["ticker"] == "KXCPI-26MAR-T1.3"
+    assert row["result"] == "no"
+    assert row["settlement_value_dollars"] == "0.0000"  # verbatim string, no floats
+    assert row["settlement_ts"] == "2026-04-10T13:06:04.496954Z"
+    assert row["cap_strike"] == ""  # absent on greater-type strikes, never imputed
+
+
+def test_parse_settled_row_missing_identity_raises():
+    raw = dict(REAL_SETTLED)
+    del raw["event_ticker"]
+    with _pytest.raises(KeyError):
+        parse_settled_row(raw, "KXCPI")
 
 REAL_MARKET = {
     "ticker": "KXCPI-26JUN-T-0.3",

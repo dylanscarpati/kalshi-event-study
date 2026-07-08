@@ -125,6 +125,37 @@ def parse_market(raw: dict) -> MarketSummary:
     )
 
 
+SETTLED_ROW_FIELDS = [
+    "series_ticker", "ticker", "event_ticker", "status", "result",
+    "settlement_value_dollars", "settlement_ts", "expiration_value",
+    "open_time", "close_time", "expiration_time", "floor_strike",
+    "cap_strike", "strike_type", "volume_fp", "source", "run_id",
+]
+
+
+def parse_settled_row(raw: dict, series_ticker: str) -> dict:
+    """Flatten one settled-market object to verbatim strings for the
+    derived CSV. Identity fields fail loud; outcome fields the older
+    archive may omit become empty strings, never imputed."""
+    return {
+        "series_ticker": series_ticker,
+        "ticker": raw["ticker"],
+        "event_ticker": raw["event_ticker"],
+        "status": raw.get("status", ""),
+        "result": raw.get("result", ""),
+        "settlement_value_dollars": raw.get("settlement_value_dollars", ""),
+        "settlement_ts": raw.get("settlement_ts", ""),
+        "expiration_value": raw.get("expiration_value", ""),
+        "open_time": raw.get("open_time", ""),
+        "close_time": raw.get("close_time", ""),
+        "expiration_time": raw.get("expiration_time", ""),
+        "floor_strike": str(raw.get("floor_strike", "")),
+        "cap_strike": str(raw.get("cap_strike", "")),
+        "strike_type": raw.get("strike_type", ""),
+        "volume_fp": raw.get("volume_fp", ""),
+    }
+
+
 @dataclass(frozen=True)
 class ConsolidatedTop:
     """Top of the consolidated YES book.
