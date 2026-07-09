@@ -139,3 +139,39 @@ async def test_gap_snapshot_reconnect_resubscribe(tmp_path):
     assert any("get_snapshot" in f["raw"] for f in outbound)
     inbound_types = {json.loads(f["raw"])["type"] for f in inbound}
     assert {"subscribed", "orderbook_snapshot", "orderbook_delta"} <= inbound_types
+    assert result["tripwire"] is False
+
+
+async def test_server_error_flood_trips_the_wire(tmp_path):
+    async def handler(ws):
+        try:
+            for _ in range(2):  # ack both subscribes
+                cmd = json.loads(await ws.recv())
+                await ws.send(json.dumps(
+                    {"id": cmd["id"], "type": "subscribed",
+                     "msg": {"channel": cmd["params"]["channels"][0], "sid": 1}}
+                ))
+            for i in range(6):  # sustained venue pushback
+                await ws.send(json.dumps({"id": 99, "type": "error",
+                                          "msg": {"code": 26, "msg": "stop"}}))
+            await asyncio.sleep(10)
+        except websockets.ConnectionClosed:
+            pass
+
+    server = await websockets.serve(handler, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    cfg = _cfg(url=f"ws://127.0.0.1:{port}", key=key, out_dir=tmp_path)
+
+    result = await asyncio.wait_for(record(cfg), timeout=20)
+    server.close()
+    await server.wait_closed()
+
+    assert result["tripwire"] is True, "5+ server errors must halt collection"
+    events = [json.loads(l) for l in Path(result["events_path"]).read_text(encoding="utf-8").splitlines()]
+    kinds = [e["kind"] for e in events]
+    assert "tripwire" in kinds
+    trip = next(e for e in events if e["kind"] == "tripwire")
+    assert trip["reason"] == "server_error_flood"
+    # the run ends immediately -- no backoff/reconnect after a tripwire
+    assert "backoff" not in kinds

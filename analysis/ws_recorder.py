@@ -122,6 +122,7 @@ async def record(cfg: RecorderConfig, stop_event: asyncio.Event | None = None) -
     deadline = start_mono + cfg.duration_s
     attempt = 0
     auth_failures = 0
+    tripwire = False  # A4.3: venue pushback halts authenticated collection
 
     def stopping() -> bool:
         return (stop_event is not None and stop_event.is_set()) or time.monotonic() >= deadline
@@ -145,6 +146,8 @@ async def record(cfg: RecorderConfig, stop_event: asyncio.Event | None = None) -
                 next_checkpoint = (
                     time.monotonic() + cfg.checkpoint_s if cfg.checkpoint_s > 0 else None
                 )
+                next_clock_event = time.monotonic() + 300.0
+                server_error_streak = 0
 
                 async def request_snapshot(sid: int, reason: str) -> None:
                     now = time.monotonic()
@@ -170,6 +173,11 @@ async def record(cfg: RecorderConfig, stop_event: asyncio.Event | None = None) -
                     tape_out(cmd)
 
                 while not stopping():
+                    if time.monotonic() >= next_clock_event:
+                        # Periodic clock/latency record (methodology 5.2): the
+                        # ws keepalive round-trip, plus wall/mono stamps.
+                        ev("clock_latency", ws_latency_s=getattr(ws, "latency", None))
+                        next_clock_event += 300.0
                     if next_checkpoint and time.monotonic() >= next_checkpoint:
                         next_checkpoint += cfg.checkpoint_s
                         for sid, (channel, _) in list(sids.items()):
@@ -205,12 +213,21 @@ async def record(cfg: RecorderConfig, stop_event: asyncio.Event | None = None) -
                         if sid is not None:
                             sids[sid] = (channel, tickers)
                             ev("subscribed", sid=sid, channel=channel, tickers=tickers)
+                        server_error_streak = 0
                     elif env.type == "error":
                         ev("server_error", cmd_id=env.id, msg=env.msg)
+                        server_error_streak += 1
+                        if server_error_streak >= 5:
+                            tripwire = True
+                            ev("tripwire", reason="server_error_flood",
+                               streak=server_error_streak)
+                            break
                     elif env.type == "orderbook_snapshot" and env.sid is not None and env.seq is not None:
                         gaps.resync(f"sid:{env.sid}", env.seq)
                         ev("snapshot_resync", sid=env.sid, seq=env.seq)
+                        server_error_streak = 0
                     elif env.sid is not None and env.seq is not None:
+                        server_error_streak = 0
                         anomaly = gaps.observe(f"sid:{env.sid}", env.seq)
                         if anomaly:
                             counters["gaps"] += 1
@@ -232,9 +249,13 @@ async def record(cfg: RecorderConfig, stop_event: asyncio.Event | None = None) -
                     ev("auth_giving_up", failures=auth_failures)
                     break
         except (websockets.WebSocketException, OSError, TimeoutError) as exc:
-            ev("disconnected", error=repr(exc))
+            close_code = getattr(getattr(exc, "rcvd", None), "code", None)
+            ev("disconnected", error=repr(exc), close_code=close_code)
+            if close_code == 1008:  # policy violation: venue is telling us to stop
+                tripwire = True
+                ev("tripwire", reason="policy_close_1008")
 
-        if stopping():
+        if tripwire or stopping():
             break
         # Stability resets the ladder; a flaky hour must not ratchet to permanent max waits.
         attempt = 0 if (connected_at and time.monotonic() - connected_at >= STABLE_CONNECTION_S) else attempt + 1
@@ -249,10 +270,11 @@ async def record(cfg: RecorderConfig, stop_event: asyncio.Event | None = None) -
         except asyncio.TimeoutError:
             pass
 
-    ev("run_end", **counters)
+    ev("run_end", **counters, tripwire=tripwire)
     frames.close()
     events.close()
-    return {**counters, "frames_path": str(frames.path), "events_path": str(events.path)}
+    return {**counters, "tripwire": tripwire,
+            "frames_path": str(frames.path), "events_path": str(events.path)}
 
 
 def preflight_credentials() -> tuple[str, object]:
@@ -336,6 +358,13 @@ def main() -> int:
         f"done: {result['frames_in']} frames, {result['gaps']} seq anomalies, "
         f"{result['reconnects']} reconnects -> {result['frames_path']}"
     )
+    if result.get("tripwire"):
+        print(
+            "TRIPWIRE: authenticated collection halted (venue pushback detected). "
+            "Do not restart; check the events tape and comply with any venue instruction.",
+            file=sys.stderr,
+        )
+        return 3
     return 0
 
 

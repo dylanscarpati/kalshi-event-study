@@ -164,6 +164,32 @@ def main() -> int:
     by_gp = Counter(r["gridpoint"] for r in rows)
     print(f"{len(rows)} observations -> {out}  sources: {dict(src)}  skipped: {skips}")
     print("per gridpoint:", dict(sorted(by_gp.items())))
+
+    # A3.1 item 6: verification diagnostics attached to every build.
+    sentinel_sided = 0
+    for m in markets:
+        _, t0_ts = t0_by_event[m["event_ticker"]]
+        for label, before_s, staleness_s, interval in GRIDPOINTS:
+            c = pick_candle(candles.get((m["ticker"], interval), []), t0_ts - before_s, staleness_s)
+            if c is None:
+                continue
+            b = cents_or_none((c.get("yes_bid") or {}).get("close"))
+            a = cents_or_none((c.get("yes_ask") or {}).get("close"))
+            if b == 0 or a == 100 or a == 0:
+                sentinel_sided += 1
+    n = len(rows)
+    spread_hist = Counter(int(r["spread_c"]) for r in rows if r["source"] == "MID")
+    diag = [
+        f"A3.1 verification diagnostics — build {datetime.now().strftime('%Y-%m-%dT%H:%M:%S')}",
+        f"observations: {n}  (MID {src['MID']}, TRADE {src['TRADE']}, skipped pairs {skips})",
+        f"fallback-usage fraction (TRADE share): {src['TRADE'] / n:.4f}",
+        "admitted-MID spread distribution (cents: count): "
+        + ", ".join(f"{s}: {spread_hist[s]}" for s in sorted(spread_hist)),
+        f"sentinel-sided candles at gridpoint selection: {sentinel_sided}",
+    ]
+    diag_path = Path("data/derived/gridpoint_diagnostics.txt")
+    diag_path.write_text("\n".join(diag) + "\n", encoding="utf-8")
+    print("\n".join(diag))
     return 0
 
 
