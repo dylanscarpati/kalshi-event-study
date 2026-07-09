@@ -128,6 +128,14 @@ def load_candles_by_ticker() -> dict[tuple[str, int], list[dict]]:
 
 
 def main() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--cap", type=int, default=HEADLINE_SPREAD_CAP_C,
+                        help="MID spread cap in cents (sensitivity grid: 5/10/20)")
+    parser.add_argument("--out", type=Path, default=Path("data/derived/gridpoint_prices.csv"))
+    args = parser.parse_args()
+
     t0_by_event = {}
     for r in csv.DictReader(open("data/derived/events.csv", encoding="utf-8")):
         t0_by_event[r["event_ticker"]] = (
@@ -141,7 +149,7 @@ def main() -> int:
         t0_iso, t0_ts = t0_by_event[m["event_ticker"]]
         for label, before_s, staleness_s, interval in GRIDPOINTS:
             series = candles.get((m["ticker"], interval), [])
-            partial = gridpoint_row(series, t0_ts - before_s, staleness_s)
+            partial = gridpoint_row(series, t0_ts - before_s, staleness_s, cap_c=args.cap)
             if partial is None:
                 skips += 1
                 continue
@@ -153,7 +161,7 @@ def main() -> int:
                 "era": "pre_collector",
                 **partial,
             })
-    out = Path("data/derived/gridpoint_prices.csv")
+    out = args.out
     with out.open("w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=FIELDS)
         w.writeheader()
@@ -187,7 +195,7 @@ def main() -> int:
         + ", ".join(f"{s}: {spread_hist[s]}" for s in sorted(spread_hist)),
         f"sentinel-sided candles at gridpoint selection: {sentinel_sided}",
     ]
-    diag_path = Path("data/derived/gridpoint_diagnostics.txt")
+    diag_path = out.with_name(out.stem + "_diagnostics.txt")
     diag_path.write_text("\n".join(diag) + "\n", encoding="utf-8")
     print("\n".join(diag))
     return 0
