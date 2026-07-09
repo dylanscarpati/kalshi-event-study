@@ -40,7 +40,11 @@ Stated up front, before any results:
 
 ## Data and compliance
 
-This project collects market data for research only. No trading, ever. Raw collected data is not redistributed in this repository, per Kalshi's data terms; the collection code lets anyone regenerate the dataset themselves. The market-data endpoints used today require no credentials; the planned collector's API credentials will live in a local `.env` file, which is gitignored from the start.
+Market data is collected through Kalshi's documented public API for non-commercial academic research. No trading, ever. **Raw market data is not included in this repository and is not redistributed in any form**; only aggregated statistical outputs (figures, tables, summary statistics) appear here, and the collection code lets anyone regenerate the underlying dataset themselves. Market data is provided by and attributed to [Kalshi](https://kalshi.com). Public market-data endpoints require no credentials; the collector's API credentials live in a local `.env` file, which is gitignored from the start.
+
+## Pre-registration
+
+The complete methodology — research questions, statistical machinery, exclusion rules, and the dated amendment log — is published in [METHODOLOGY.md](METHODOLOGY.md) **before any analysis results exist**. The public commit timestamp is deliberate: analysis choices (event-inclusion rules, price-source hierarchy, adjustment-time definitions, sensitivity grids) were fixed and published before any reliability curve or event-study figure was rendered, so they cannot have been tuned to the results.
 
 ## Setup
 
