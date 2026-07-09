@@ -352,6 +352,8 @@ An independent methodological review of the A3 hierarchy (archived privately) co
 
 Integrity note: as of this recording, no reliability curve, diagram, or bucket table has been rendered or inspected; A3.1 locks under the same pre-inspection discipline as A3.
 
+**Implementation note (2026-07-08, recorded before any reliability curve was inspected):** the exact Murphy identity BS = REL − RES + UNC holds when all forecasts within a bucket are identical; with continuous prices binned into fixed 10¢ buckets, the within-bucket cross-term does not vanish. Implementation therefore reports the **raw** Brier score, the decomposition terms computed from bucket quantities exactly as §3.3 defines them — which decompose the **bucket-discretized** score BS* = (1/N)Σ(p̄_bucket(i) − yᵢ)² to machine precision (asserted in code) — and the raw-vs-discretized gap per band, stated on the figure.
+
 ---
 
 ## 10. Execution order (cross-reference: project milestones)

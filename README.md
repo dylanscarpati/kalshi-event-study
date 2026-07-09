@@ -17,7 +17,14 @@ What exists today: a REST probe that discovers the nearest open event in a macro
 
 ## Results
 
-Forthcoming. Every figure will state its sample size; null results will be reported as nulls.
+First pre-registered result — calibration as a function of time-to-resolution (RQ3), computed from 5,570 probability observations across 180 macro release events settling 2021–2026, under the price-source rules locked in [METHODOLOGY.md](METHODOLOGY.md) before any curve was inspected:
+
+![Calibration by time-to-resolution](figures/calibration_curves.png)
+
+- **Prices are well-calibrated at every horizon.** The reliability (miscalibration) component of the Brier score sits between 0.0006 and 0.0066 across all nine time-to-resolution bands (0 = perfect), with 95% event-clustered bootstrap intervals (B = 10,000).
+- **Prices sharpen honestly as the release approaches.** Resolution rises from 0.135 at 30 days out to ≈ 0.17 in the final hours while reliability stays pinned near zero — the pre-registered hypothesis. The overall Brier score falls from 0.114 to ≈ 0.08.
+- **The headline is robust to the pre-registered sensitivity grid**: pooled Brier 0.0907–0.0922 across spread caps of 5¢/10¢/20¢.
+- Companion figures: [Brier decomposition](figures/brier_decomposition.png) and the [extreme-bucket quoting-artifact check](figures/artifact_check.png) (a small ≈ 1–2¢ longshot reliability gap sits inside the boundary-artifact zone anticipated by the methodology and is examined there). Every figure states n, the event-cluster count, and B; buckets under n = 25 are not drawn.
 
 ## Limitations
 
