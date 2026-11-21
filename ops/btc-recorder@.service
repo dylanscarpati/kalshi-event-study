@@ -2,8 +2,10 @@
 # so "btc-recorder@kraken" records Kraken. Installed by ops/install.sh.
 [Unit]
 Description=Order-book recorder for %i
-After=network-online.target
-Wants=network-online.target
+# Start once the network is up and the clock has been set, so timestamps
+# and the reconnect schedule are right from the first message.
+After=network-online.target time-sync.target
+Wants=network-online.target time-sync.target
 # Never give up restarting, however often the program has exited.
 StartLimitIntervalSec=0
 

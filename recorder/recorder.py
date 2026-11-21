@@ -17,6 +17,7 @@ exchange, so trouble with one exchange cannot disturb the others.
 from __future__ import annotations
 
 import argparse
+import errno
 import math
 import queue
 import random
@@ -37,6 +38,10 @@ from tape import DiskFull, Tape
 # The recorder reconnects on purpose once per period, so that every file
 # begins with a full order book and can be read without the files before it.
 RECONNECT_PERIOD_S = 3600
+
+# A planned reconnect is never sooner than this after a connection opens, so a
+# connection that opens just before the planned time is not closed at once.
+MIN_CONNECTION_S = 60
 
 # How long one wait for a message lasts. The recorder checks its other duties
 # (stopping, reconnecting, keep-alives) at least this often.
@@ -65,6 +70,12 @@ DISK_FULL_WAIT_S = 60.0  # look again for free disk space after this long
 
 USER_AGENT = "order-book-recorder"
 
+# The project measures the 60 seconds before each quarter hour. A reconnect
+# leaves a gap of a second or two, so the recorder never reconnects on purpose
+# in the last PROTECTED_S seconds of a quarter hour.
+QUARTER_S = 900
+PROTECTED_S = 180
+
 
 def next_planned_reconnect(now_s: float, period_s: int, offset_s: int) -> float:
     """The next moment, strictly after now_s, that is offset_s into a period.
@@ -74,6 +85,30 @@ def next_planned_reconnect(now_s: float, period_s: int, offset_s: int) -> float:
     """
     periods_done = math.floor((now_s - offset_s) / period_s)
     return (periods_done + 1) * period_s + offset_s
+
+
+def may_reconnect_on_purpose(wall_s: float) -> bool:
+    """False in the minutes before a quarter hour, when no gap is acceptable.
+
+    The schedule already keeps planned reconnects away from these minutes;
+    this check also covers a clock that jumped after the schedule was set.
+    """
+    return wall_s % QUARTER_S < QUARTER_S - PROTECTED_S
+
+
+def as_text_if_possible(data: str | bytes) -> str | bytes:
+    """A message as text when it is valid UTF-8, otherwise as the raw bytes.
+
+    Messages are taken from the library as bytes and decoded here. If the
+    library decoded them, one malformed message would make it drop the
+    connection, losing that message and every message queued behind it.
+    """
+    if isinstance(data, bytes):
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError:
+            return data
+    return data
 
 
 def backoff_delay(failures: int) -> float:
@@ -144,12 +179,13 @@ def record_messages(
         if stop.is_set():
             tape.event("stopped")
             return "stopped"
-        if time.time() >= reconnect_at_s:
+        now_s = time.time()
+        if now_s >= reconnect_at_s and may_reconnect_on_purpose(now_s):
             tape.event("planned_reconnect")
             return "planned"
 
         try:
-            message = connection.recv(timeout=POLL_S)
+            message = as_text_if_possible(connection.recv(timeout=POLL_S, decode=False))
         except TimeoutError:
             message = None
         # Both clocks are read at once, before anything else is done.
@@ -167,7 +203,7 @@ def record_messages(
             if feed.reconnect_when is not None and isinstance(message, str):
                 if feed.reconnect_when(message):
                     tape.event("requested_reconnect")
-                    return "planned"
+                    return "requested"
         elif now_mono - last_message_mono > feed.stale_after_s:
             tape.event("stale", silent_s=round(now_mono - last_message_mono, 3))
             return "stale"
@@ -193,6 +229,23 @@ def record_messages(
             ).start()
 
 
+def write_what_is_left(connection, tape: Tape) -> None:
+    """Close the connection, then write every message it had already received.
+
+    The library keeps received messages in a queue until the recorder takes
+    them. Closing the file without emptying that queue would lose them. Each
+    is stamped when it is taken here, which can be up to CLOSE_TIMEOUT_S after
+    it arrived; these messages follow the event that ended the connection.
+    """
+    connection.close()  # waits at most CLOSE_TIMEOUT_S for the exchange's goodbye
+    while True:
+        try:
+            data = connection.recv(timeout=CLOSE_TIMEOUT_S, decode=False)
+        except (ConnectionClosed, TimeoutError):
+            return
+        tape.message(time.time_ns(), time.monotonic_ns(), as_text_if_possible(data))
+
+
 def record_connection(
     feed: Feed, tape: Tape, reconnect_at_s: float, stop: threading.Event
 ) -> str:
@@ -210,12 +263,18 @@ def record_connection(
     ) as connection:
         tape.open_new()
         try:
-            return record_messages(feed, tape, connection, reconnect_at_s, stop)
-        except ConnectionClosed as closed:
-            tape.event("disconnected", reason=str(closed))
-            return "disconnected"
+            try:
+                outcome = record_messages(feed, tape, connection, reconnect_at_s, stop)
+            except ConnectionClosed as closed:
+                tape.event("disconnected", reason=str(closed))
+                outcome = "disconnected"
+            write_what_is_left(connection, tape)
+            return outcome
         except Exception as error:
-            tape.event("error", detail=repr(error))
+            try:
+                tape.event("error", detail=repr(error))
+            except Exception:
+                pass  # the tape itself may be what failed, for example a full disk
             raise
         finally:
             tape.close()  # runs however the block above ends
@@ -232,7 +291,7 @@ def run(
     failures = 0
     while not stop.is_set():
         reconnect_at_s = next_planned_reconnect(
-            time.time(), reconnect_period_s, feed.reconnect_offset_s
+            time.time() + MIN_CONNECTION_S, reconnect_period_s, feed.reconnect_offset_s
         )
         started_mono = time.monotonic()
         try:
@@ -241,7 +300,13 @@ def run(
             log(feed, f"not recording: {full}")
             stop.wait(DISK_FULL_WAIT_S)
             continue
-        except (OSError, WebSocketException) as error:  # ordinary network trouble
+        except OSError as error:
+            if error.errno == errno.ENOSPC:  # the disk filled up during a file
+                log(feed, f"not recording: disk full ({error})")
+                stop.wait(DISK_FULL_WAIT_S)
+                continue
+            outcome = f"connection failed ({error!r})"  # ordinary network trouble
+        except WebSocketException as error:
             outcome = f"connection failed ({error!r})"
         except Exception:  # a bug: say so loudly, but keep recording
             outcome = "unexpected error"
@@ -250,6 +315,9 @@ def run(
         if outcome in ("planned", "stopped"):
             failures = 0
             continue  # reconnect at once; nothing went wrong
+        # Everything else waits before reconnecting, including a reconnect the
+        # exchange asked for: an exchange that keeps asking at once would
+        # otherwise get a flood of connections, and could ban the address.
         lasted_s = time.monotonic() - started_mono
         failures = 0 if lasted_s >= STABLE_AFTER_S else failures + 1
         delay_s = backoff_delay(failures)

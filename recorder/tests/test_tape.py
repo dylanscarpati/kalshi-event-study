@@ -195,3 +195,72 @@ def test_refuses_to_start_a_file_when_the_disk_is_nearly_full(tmp_path, monkeypa
 
     with pytest.raises(DiskFull):
         tape.open_new()
+
+
+def test_a_damaged_end_loses_none_of_the_records_before_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(tape_module, "FLUSH_EVERY_S", 0.0)
+    tape = Tape(tmp_path, "coinbase")
+    path = tape.open_new()
+    for number in range(300):
+        tape.message(wall_ns=number, mono_ns=number, payload=f"message {number}")
+    whole = path.read_bytes()  # every record flushed; the file is still open
+    tape.close()
+
+    damaged = tmp_path / "damaged.jsonl.gz"
+    for garbage in (b"\x00" * 4096, bytes(range(256)) * 16):
+        damaged.write_bytes(whole + garbage)  # e.g. a power cut left junk at the end
+
+        survivors = [record["raw"] for record in read_tape(damaged)]
+
+        assert survivors == [f"message {number}" for number in range(300)]
+
+
+def test_complete_and_cut_off_files_can_be_told_apart(tmp_path, monkeypatch):
+    monkeypatch.setattr(tape_module, "FLUSH_EVERY_S", 0.0)
+    tape = Tape(tmp_path, "kraken")
+    path = tape.open_new()
+    tape.message(wall_ns=1, mono_ns=2, payload="x")
+    cut = tmp_path / "cut.jsonl.gz"
+    cut.write_bytes(path.read_bytes())  # copied before the file was finished
+    tape.close()
+
+    assert tape_module.is_complete(path)
+    assert not tape_module.is_complete(cut)
+
+
+def test_events_have_no_payload(tmp_path):
+    tape = Tape(tmp_path, "kraken")
+    path = tape.open_new()
+    tape.event("sent", raw='{"op":"subscribe"}')
+    tape.message(wall_ns=1, mono_ns=2, payload="from the exchange")
+    tape.close()
+
+    event, message = read_tape(path)
+
+    assert tape_module.payload_of(event) is None
+    assert tape_module.payload_of(message) == "from the exchange"
+
+
+def test_a_failed_close_still_leaves_the_tape_ready_for_a_new_file(tmp_path, monkeypatch):
+    tape = Tape(tmp_path, "kraken")
+    tape.open_new()
+
+    real_close = tape_module.gzip.GzipFile.close
+    failures = []
+
+    def broken_close(self):
+        real_close(self)  # like the real one, it marks itself closed even on failure
+        if not failures:  # fail once, as a full disk would
+            failures.append(1)
+            raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(tape_module.gzip.GzipFile, "close", broken_close)
+    with pytest.raises(OSError):
+        tape.close()
+    monkeypatch.undo()
+
+    tape.close()  # nothing left open: a second close does nothing
+    second = tape.open_new()
+    tape.message(wall_ns=1, mono_ns=2, payload="fine")
+    tape.close()
+    assert [r["raw"] for r in read_tape(second)] == ["fine"]

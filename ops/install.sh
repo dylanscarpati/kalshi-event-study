@@ -27,8 +27,12 @@ rm -rf "$app/recorder"
 cp -r "$src/recorder" "$app/recorder"
 rm -rf "$app/recorder/tests" "$app/recorder/__pycache__"
 
-[ -x "$app/venv/bin/python" ] || python3 -m venv "$app/venv"
+# A Python environment needs the python3-venv package. If an earlier attempt
+# failed half way, the environment exists without pip; --clear rebuilds it.
+dpkg -s python3-venv >/dev/null 2>&1 || apt-get install -y python3-venv
+[ -x "$app/venv/bin/pip" ] || python3 -m venv --clear "$app/venv"
 "$app/venv/bin/pip" install --quiet -r "$app/recorder/requirements.txt"
+install -m 755 "$src/ops/health.sh" "$app/health.sh"
 
 install -m 644 "$src/ops/btc-recorder@.service" /etc/systemd/system/btc-recorder@.service
 systemctl daemon-reload
@@ -44,4 +48,4 @@ echo "feed         state"
 for feed in $feeds; do
   printf '%-12s %s\n' "$feed" "$(systemctl is-active "btc-recorder@$feed" || true)"
 done
-echo "Run 'bash ops/health.sh' in a minute to confirm data is arriving."
+echo "In a minute, run 'bash $app/health.sh' to confirm data is arriving."

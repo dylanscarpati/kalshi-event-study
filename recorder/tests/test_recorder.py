@@ -48,7 +48,8 @@ class PretendExchange:
         return self
 
     def __exit__(self, *exc):
-        self._server.shutdown()
+        self._server.shutdown()  # stops accepting connections
+        self._server.socket.close()  # and frees the listening socket
 
     def _handle(self, connection):
         with self._lock:
@@ -133,12 +134,19 @@ def summary(records):
     return [record.get("event", record.get("raw")) for record in records]
 
 
+# Kept before any test replaces it, so that its own test checks the real one.
+REAL_MAY_RECONNECT_ON_PURPOSE = recorder.may_reconnect_on_purpose
+
+
 @pytest.fixture(autouse=True)
 def fast_timing(monkeypatch):
     """Shrink the recorder's waits so the tests take milliseconds, not minutes."""
     monkeypatch.setattr(recorder, "POLL_S", 0.02)
     monkeypatch.setattr(recorder, "BACKOFF_BASE_S", 0.02)
     monkeypatch.setattr(recorder, "DISK_FULL_WAIT_S", 0.02)
+    monkeypatch.setattr(recorder, "MIN_CONNECTION_S", 0)
+    # The real rule depends on the time of day; tests must not.
+    monkeypatch.setattr(recorder, "may_reconnect_on_purpose", lambda wall_s: True)
 
 
 def feed_for(exchange, **changes):
@@ -255,8 +263,22 @@ def test_reconnects_on_schedule_and_starts_a_new_file(tmp_path):
     files = recording.files()
     assert len(files) >= 3
     for records in files[:2]:
-        assert summary(records)[:3] == ["connected", "sent", "book"]
+        assert summary(records)[:2] == ["connected", "sent"]
         assert summary(records)[-1] == "planned_reconnect"
+    # With a one-second period, a connection that opens just before a second
+    # boundary can be replaced before its first message arrives; most are not.
+    assert sum("book" in summary(records) for records in files) >= 2
+
+
+def test_a_planned_reconnect_is_never_right_after_connecting(tmp_path, monkeypatch):
+    monkeypatch.setattr(recorder, "MIN_CONNECTION_S", 3600)  # the real rule, scaled up
+    with PretendExchange(send_then_wait("book")) as exchange:
+        with Recording(
+            feed_for(exchange, reconnect_offset_s=0), tmp_path, reconnect_period_s=1
+        ):
+            time.sleep(1.5)  # a one-second period would have reconnected by now
+
+    assert exchange.connections == 1
 
 
 def test_waits_before_subscribing_when_the_feed_asks_for_it(tmp_path):
@@ -344,6 +366,7 @@ class PretendWebServer:
 
     def __exit__(self, *exc):
         self._server.shutdown()
+        self._server.server_close()  # frees the listening socket
 
 
 def test_downloads_and_records_the_full_book(tmp_path):
@@ -489,3 +512,161 @@ def test_stopping_leaves_a_complete_file(tmp_path):
         lines = plain.read().splitlines()  # raises if the file's end is missing
     assert json.loads(lines[-1])["event"] == "stopped"
     assert summary(recording.files()[0])[-1] == "stopped"
+
+
+# --------------------------------------------------------------------------
+# Nothing received may be lost when a connection ends
+# --------------------------------------------------------------------------
+
+
+def stream_until_closed(counts):
+    """Script: after the subscribe, send numbered messages as fast as possible
+    until the client closes. counts[i] is how many connection i got out."""
+
+    def script(connection, exchange):
+        index = len(counts)
+        counts.append(0)
+        exchange.note(connection.recv())
+        while True:
+            try:
+                connection.send(f"m{counts[index]}")
+            except ConnectionClosed:
+                return
+            counts[index] += 1
+            if counts[index] % 50 == 0:
+                time.sleep(0.001)  # let the client keep up a little
+
+    return script
+
+
+def test_a_planned_reconnect_loses_nothing_already_received(tmp_path):
+    counts = []
+    with PretendExchange(stream_until_closed(counts)) as exchange:
+        with Recording(
+            feed_for(exchange, reconnect_offset_s=0), tmp_path, reconnect_period_s=1
+        ) as recording:
+            wait_for(lambda: exchange.connections >= 3, timeout=10)
+
+    files = recording.files()
+    assert len(files) >= 3
+    for sent, records in zip(counts, files):
+        written = [r["raw"] for r in records if "event" not in r]
+        # Every message the exchange got out is on the tape, once, in order.
+        assert written == [f"m{n}" for n in range(sent)]
+    # The first two connections each ran a full period, so plenty was in flight
+    # (the last one is cut short when the test stops).
+    assert counts[0] > 100 and counts[1] > 100
+
+
+def test_stopping_loses_nothing_already_received(tmp_path):
+    counts = []
+    with PretendExchange(stream_until_closed(counts)) as exchange:
+        with Recording(feed_for(exchange), tmp_path) as recording:
+            wait_for(lambda: counts and counts[0] > 500)
+
+    (records,) = recording.files()
+    written = [r["raw"] for r in records if "event" not in r]
+    assert written == [f"m{n}" for n in range(counts[0])]
+
+
+def test_a_reconnect_request_loses_nothing_already_received(tmp_path):
+    request = '{"event":"please reconnect"}'
+    counts = []
+    streaming = stream_until_closed(counts)
+
+    def ask_then_stream(connection, exchange):
+        connection.send(request)  # sent before the subscribe is even read
+        streaming(connection, exchange)
+
+    with PretendExchange(ask_then_stream, send_then_wait()) as exchange:
+        feed = feed_for(exchange, reconnect_when=lambda raw: "please reconnect" in raw)
+        with Recording(feed, tmp_path) as recording:
+            wait_for(lambda: exchange.connections >= 2)
+            time.sleep(0.2)
+
+    first = recording.files()[0]
+    written = [r["raw"] for r in first if "event" not in r]
+    # Everything the exchange got out before it saw the recorder's goodbye.
+    assert written == [request, *[f"m{n}" for n in range(counts[0])]]
+
+
+def test_a_failed_reply_loses_nothing_already_received(tmp_path):
+    def slow_reply(raw):
+        if raw == "heartbeat":
+            time.sleep(0.3)  # the exchange hangs up before the answer goes out
+            return "answer"
+        return None
+
+    burst = [f"after {n}" for n in range(500)]
+    with PretendExchange(send_then_hang_up("heartbeat", *burst)) as exchange:
+        feed = feed_for(exchange, reply=slow_reply)
+        with Recording(feed, tmp_path) as recording:
+            wait_for(lambda: exchange.connections >= 2)
+            time.sleep(0.2)
+
+    first = recording.files()[0]
+    written = [r["raw"] for r in first if "event" not in r]
+    assert written == ["heartbeat", *burst]
+
+
+def test_repeated_reconnect_requests_slow_down(tmp_path):
+    request = '{"event":"please reconnect"}'
+    with PretendExchange(send_then_wait(request)) as exchange:
+        feed = feed_for(exchange, reconnect_when=lambda raw: "please reconnect" in raw)
+        with Recording(feed, tmp_path):
+            time.sleep(1.0)
+
+    # Waits of 0.02, 0.04, 0.08 ... s (shrunk for the test): about six
+    # attempts in a second, not hundreds.
+    assert exchange.connections <= 10
+
+
+def test_a_message_that_is_not_valid_text_is_kept_and_recording_continues(tmp_path):
+    def script(connection, exchange):
+        exchange.note(connection.recv())
+        connection.send(b"\xff\xfe not UTF-8", text=True)  # a broken text message
+        connection.send("after")
+        for text in connection:
+            exchange.note(text)
+
+    with PretendExchange(script) as exchange:
+        with Recording(feed_for(exchange), tmp_path) as recording:
+            wait_for(lambda: exchange.received)
+            time.sleep(0.2)
+
+    (records,) = recording.files()
+    messages = [tape_module.payload_of(r) for r in records if "event" not in r]
+    assert messages == [b"\xff\xfe not UTF-8", "after"]
+    assert exchange.connections == 1  # the connection survived
+
+
+def test_a_full_disk_mid_file_waits_instead_of_reconnecting(tmp_path, monkeypatch, capsys):
+    import errno
+
+    def no_space(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(tape_module.Tape, "message", no_space)
+    monkeypatch.setattr(recorder, "DISK_FULL_WAIT_S", 0.5)
+    with PretendExchange(send_then_wait("book")) as exchange:
+        with Recording(feed_for(exchange), tmp_path):
+            time.sleep(0.4)
+
+    assert exchange.connections == 1  # it waited; it did not hammer the exchange
+    assert "not recording" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------
+# Planned reconnects never fall in the measured minutes
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "seconds_into_quarter, allowed",
+    [(0, True), (300, True), (719, True), (720, False), (870, False), (899, False)],
+)
+def test_planned_reconnects_avoid_the_minutes_before_each_quarter_hour(
+    seconds_into_quarter, allowed
+):
+    quarter = 1_800_000_000 - (1_800_000_000 % 900)
+    assert REAL_MAY_RECONNECT_ON_PURPOSE(quarter + seconds_into_quarter) is allowed

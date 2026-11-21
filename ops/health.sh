@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Prints the state of every recorder. Run on the recording server:
 #
-#     bash ops/health.sh
+#     bash /opt/btc-recorder/health.sh
 #
 # A healthy feed shows "active", a last write within a few seconds, and few
 # retries. "last write" is the age of the newest file's latest change; the

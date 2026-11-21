@@ -99,16 +99,24 @@ class Tape:
         self._write(record)
 
     def close(self) -> None:
-        """Finish the current file and make it read-only. Safe to call twice."""
+        """Finish the current file and make it read-only. Safe to call twice.
+
+        If finishing fails (for example because the disk is full), the error
+        is passed on, but the file is still closed and forgotten, so the next
+        open_new() starts cleanly. read_tape() reads such a file up to its
+        last complete record, and is_complete() reports it as unfinished.
+        """
         if self._gzip is None:
             return
-        self._gzip.close()  # writes the gzip trailer; does not close self._file
-        self._file.flush()
-        os.fsync(self._file.fileno())
-        self._file.close()
-        os.chmod(self._path, 0o444)
-        self._gzip = None
-        self._file = None
+        compressor, file, path = self._gzip, self._file, self._path
+        self._gzip = self._file = None  # forget them first, whatever happens below
+        try:
+            compressor.close()  # writes the gzip trailer; does not close file
+            file.flush()
+            os.fsync(file.fileno())
+        finally:
+            file.close()
+            os.chmod(path, 0o444)
 
     def _write(self, record: dict) -> None:
         if self._gzip is None:
@@ -127,28 +135,92 @@ class Tape:
         self._last_flush_mono = time.monotonic()
 
 
+# How much decompressed text read_tape produces per step. Small steps mean that
+# when a damaged end is reached, only one small step has to be re-read slowly.
+_STEP_BYTES = 64 * 1024
+
+
+def _decompressed(path: Path) -> Iterator[bytes]:
+    """Yield a tape's decompressed bytes, in order, as far as they are readable.
+
+    A tape cut off mid-write simply ends. A tape whose end holds junk (which a
+    power cut can leave behind) is read up to the last byte that decompresses:
+    the step that hits the junk is replayed one byte at a time from a saved
+    copy of the decompressor, so nothing readable before the junk is lost.
+    """
+    decompressor = zlib.decompressobj(wbits=31)  # 31 selects the gzip format
+    pending = b""
+    with open(path, "rb") as compressed:
+        while True:
+            if not pending:
+                pending = compressed.read(1 << 20)
+                if not pending:
+                    return
+            saved = decompressor.copy()
+            try:
+                out = decompressor.decompress(pending, _STEP_BYTES)
+            except zlib.error:
+                yield from _salvage(saved, pending)
+                return
+            pending = decompressor.unconsumed_tail
+            if out:
+                yield out
+            if decompressor.eof:  # the end of the gzip data; anything after is ignored
+                return
+
+
+def _salvage(decompressor, data: bytes) -> Iterator[bytes]:
+    """Replay one failing step, feeding the input a byte at a time.
+
+    Feeding the input (not limiting the output) is what matters: zlib reads on
+    past the last real byte within the same call, reaches the junk, and the
+    whole call's output is discarded with the error. Fed one input byte at a
+    time, the call that produces the last real byte never sees the junk.
+    """
+    for position in range(len(data)):
+        try:
+            piece = decompressor.decompress(data[position : position + 1])
+        except zlib.error:
+            return
+        if piece:
+            yield piece
+        if decompressor.eof:
+            return
+
+
 def read_tape(path: Path) -> Iterator[dict]:
     """Yield each complete record in a tape, in the order it was written.
 
-    A tape whose end is missing, because the recorder was killed or the machine
-    lost power, is read as far as its last complete line. No error is raised
-    for the missing end.
+    A tape whose end is missing or damaged, because the recorder was killed or
+    the machine lost power, is read as far as its last complete line. No error
+    is raised for the missing end; use is_complete() to find out.
     """
-    decompressor = zlib.decompressobj(wbits=31)  # 31 selects the gzip format
     unfinished = b""
-    with open(path, "rb") as compressed:
-        while True:
-            chunk = compressed.read(1 << 20)
-            if not chunk:
-                break
-            lines = (unfinished + decompressor.decompress(chunk)).split(b"\n")
-            unfinished = lines.pop()  # text after the last line break, if any
-            for line in lines:
-                yield json.loads(line)
+    for chunk in _decompressed(path):
+        lines = (unfinished + chunk).split(b"\n")
+        unfinished = lines.pop()  # text after the last line break, if any
+        for line in lines:
+            yield json.loads(line)
+
+
+def is_complete(path: Path) -> bool:
+    """True if the tape was finished properly, False if it was cut off."""
+    decompressor = zlib.decompressobj(wbits=31)
+    try:
+        with open(path, "rb") as compressed:
+            while chunk := compressed.read(1 << 20):
+                decompressor.decompress(chunk)
+                while decompressor.unconsumed_tail:
+                    decompressor.decompress(decompressor.unconsumed_tail)
+    except zlib.error:
+        return False
+    return decompressor.eof
 
 
 def payload_of(record: dict) -> str | bytes | None:
     """The message a record holds, as received. None if the record is an event."""
+    if "event" in record:
+        return None
     if "raw" in record:
         return record["raw"]
     if "raw_b64" in record:
