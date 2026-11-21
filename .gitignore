@@ -1,0 +1,10 @@
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+# C++ build output
+build/
+# Recorded data never belongs in the repository
+data/
+*.jsonl
+*.jsonl.gz

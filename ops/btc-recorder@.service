@@ -1,0 +1,33 @@
+# One recorder per exchange. The part of the unit name after "@" is the feed,
+# so "btc-recorder@kraken" records Kraken. Installed by ops/install.sh.
+[Unit]
+Description=Order-book recorder for %i
+After=network-online.target
+Wants=network-online.target
+# Never give up restarting, however often the program has exited.
+StartLimitIntervalSec=0
+
+[Service]
+User=recorder
+Group=recorder
+WorkingDirectory=/opt/btc-recorder
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/btc-recorder/venv/bin/python /opt/btc-recorder/recorder/recorder.py %i --data-dir /data
+
+# If the program ever exits, start it again after five seconds.
+Restart=always
+RestartSec=5
+
+# Stopping sends SIGTERM; the recorder closes its file and exits within seconds.
+TimeoutStopSec=30
+
+# The recorder may write only under /data and may not gain privileges.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/data
+MemoryMax=600M
+
+[Install]
+WantedBy=multi-user.target
