@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import queue
 import random
 import signal
 import sys
@@ -42,7 +43,14 @@ RECONNECT_PERIOD_S = 3600
 POLL_S = 1.0
 
 OPEN_TIMEOUT_S = 20.0  # give up on a connection attempt after this long
-CLOSE_TIMEOUT_S = 5.0  # wait this long for a polite goodbye when leaving
+CLOSE_TIMEOUT_S = 2.0  # wait this long for a polite goodbye when leaving
+
+# How many received messages the library may hold before the recorder takes
+# them. When this fills, the library stops reading the network, which also
+# stops it answering the exchange's pings, and some exchanges then hang up
+# within 20 to 60 seconds. Its default is 16; at Kraken's busiest that is a
+# hundredth of a second. 4096 absorbs a pause of several seconds.
+MAX_QUEUE = 4096
 
 # After a failed connection the recorder waits before trying again: 2, 4, 8 ...
 # times BACKOFF_BASE_S, never more than BACKOFF_CAP_S. A connection that
@@ -84,34 +92,29 @@ def log(feed: Feed, text: str) -> None:
     print(f"{feed.name}: {text}", flush=True)
 
 
-def download_full_book(feed: Feed, tape: Tape) -> float | None:
-    """Fetch the full order book over the web and write it to the tape.
+def download_full_book(url: str, results: queue.Queue) -> None:
+    """Fetch the full order book over the web and put the outcome on results.
 
-    Returns when to do it next, on the forward-only clock, or None for never.
-    While this waits for the download, arriving messages queue up and are
-    stamped a little late; SNAPSHOT_TIMEOUT_S bounds how late.
+    This runs on its own thread, so that messages keep being taken in while
+    the download is under way. It never writes to the tape itself: only the
+    recording loop does that, so two threads never write at once.
     """
     requested_wall_ns = time.time_ns()
     try:
-        request = urllib.request.Request(
-            feed.rest_snapshot_url, headers={"User-Agent": USER_AGENT}
-        )
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(request, timeout=SNAPSHOT_TIMEOUT_S) as response:
             body = response.read().decode("utf-8")
-    except (OSError, ValueError) as error:  # network trouble, or not valid text
-        tape.event(
-            "rest_snapshot_failed", url=feed.rest_snapshot_url, detail=repr(error)
+    except Exception as error:  # any failure, including a bug, is reported
+        results.put(
+            ("rest_snapshot_failed",
+             {"url": url, "requested_wall_ns": requested_wall_ns, "detail": repr(error)})
         )
-        return time.monotonic() + SNAPSHOT_RETRY_S
-    tape.event(
-        "rest_snapshot",
-        url=feed.rest_snapshot_url,
-        requested_wall_ns=requested_wall_ns,
-        raw=body,
+        return
+    results.put(
+        ("rest_snapshot",
+         {"url": url, "requested_wall_ns": requested_wall_ns,
+          "received_wall_ns": time.time_ns(), "raw": body})
     )
-    if feed.rest_snapshot_every_s > 0:
-        return time.monotonic() + feed.rest_snapshot_every_s
-    return None
 
 
 def record_messages(
@@ -132,9 +135,10 @@ def record_messages(
     now_mono = time.monotonic()
     last_message_mono = now_mono
     next_keepalive_mono = now_mono + feed.keepalive_every_s
-    next_snapshot_mono = None
+    next_snapshot_mono = None  # when to start the next download, if any
     if feed.rest_snapshot_url:
         next_snapshot_mono = now_mono + feed.rest_snapshot_after_s
+    downloads: queue.Queue = queue.Queue()  # finished downloads, from their thread
 
     while True:
         if stop.is_set():
@@ -160,6 +164,10 @@ def record_messages(
                 answer = feed.reply(message)
                 if answer is not None:
                     send(answer)
+            if feed.reconnect_when is not None and isinstance(message, str):
+                if feed.reconnect_when(message):
+                    tape.event("requested_reconnect")
+                    return "planned"
         elif now_mono - last_message_mono > feed.stale_after_s:
             tape.event("stale", silent_s=round(now_mono - last_message_mono, 3))
             return "stale"
@@ -168,8 +176,21 @@ def record_messages(
             send(feed.keepalive_message)
             next_keepalive_mono = now_mono + feed.keepalive_every_s
 
+        # Write down any download that finished, and plan the next one.
+        while not downloads.empty():
+            kind, details = downloads.get()
+            tape.event(kind, **details)
+            if kind == "rest_snapshot_failed":
+                next_snapshot_mono = now_mono + SNAPSHOT_RETRY_S
+            elif feed.rest_snapshot_every_s > 0:
+                next_snapshot_mono = now_mono + feed.rest_snapshot_every_s
         if next_snapshot_mono is not None and now_mono >= next_snapshot_mono:
-            next_snapshot_mono = download_full_book(feed, tape)
+            next_snapshot_mono = None  # nothing more until this one finishes
+            threading.Thread(
+                target=download_full_book,
+                args=(feed.rest_snapshot_url, downloads),
+                daemon=True,  # never keeps the program alive on its own
+            ).start()
 
 
 def record_connection(
@@ -185,6 +206,7 @@ def record_connection(
         close_timeout=CLOSE_TIMEOUT_S,
         ping_interval=feed.ping_interval_s,
         max_size=None,  # no limit: a full order book can be several megabytes
+        max_queue=MAX_QUEUE,
     ) as connection:
         tape.open_new()
         try:

@@ -3,6 +3,10 @@
 Each Feed holds the facts needed to connect to one exchange's public
 order-book feed and stay connected. The recorder itself contains no
 exchange-specific code: everything that differs between exchanges is here.
+
+Every setting below was established on 2026-11-21 from the exchange's
+documentation and from live connections of 4 to 25 minutes each. The notes
+next to each feed say what was observed.
 """
 
 from __future__ import annotations
@@ -31,6 +35,8 @@ class Feed:
     # A function that looks at a received message and returns the reply the
     # exchange expects, or None when no reply is needed.
     reply: Callable[[str], str | None] | None = None
+    # A function that returns True when a message asks the client to reconnect.
+    reconnect_when: Callable[[str], bool] | None = None
     # A text sent every keepalive_every_s seconds. Empty means none.
     keepalive_message: str = ""
     keepalive_every_s: float = 0.0
@@ -42,4 +48,112 @@ class Feed:
     rest_snapshot_every_s: float = 0.0
 
 
-FEEDS: dict[str, Feed] = {}
+def _cryptocom_heartbeat_reply(raw: str) -> str | None:
+    """Crypto.com closes the connection unless each heartbeat is answered.
+
+    The heartbeat is {"id":<number>,"method":"public/heartbeat","code":0}, sent
+    every 30 s; the answer must repeat the same id. Only short messages are
+    parsed, so the book messages, which never contain this text, cost nothing.
+    """
+    if len(raw) > 200 or "public/heartbeat" not in raw:
+        return None
+    try:
+        message = json.loads(raw)
+    except ValueError:
+        return None
+    if message.get("method") != "public/heartbeat" or "id" not in message:
+        return None
+    return json.dumps(
+        {"id": message["id"], "method": "public/respond-heartbeat"},
+        separators=(",", ":"),
+    )
+
+
+def _bitstamp_asks_to_reconnect(raw: str) -> bool:
+    """Bitstamp sends this event before maintenance; clients should reconnect."""
+    return len(raw) < 300 and "bts:request_reconnect" in raw
+
+
+FEEDS: dict[str, Feed] = {
+    # Advanced Trade feed. Full book on subscribe (about 4 MB, 35,000 levels);
+    # every message carries sequence_num, counting from 0 on each connection, so
+    # a missed message can be detected. The heartbeats channel sends one
+    # message a second and keeps a quiet connection open; the documentation
+    # says idle channels are closed after 60 to 90 s. Pings are unnecessary:
+    # the 1-second heartbeat detects a dead connection sooner.
+    "coinbase": Feed(
+        name="coinbase",
+        url="wss://advanced-trade-ws.coinbase.com",
+        subscribe=(
+            '{"type":"subscribe","product_ids":["BTC-USD"],"channel":"level2"}',
+            '{"type":"subscribe","channel":"heartbeats"}',
+        ),
+        reconnect_offset_s=300,
+        ping_interval_s=None,
+        stale_after_s=10,
+    ),
+    # Version 2 book channel at the deepest public depth, 1000 levels a side.
+    # Full book on subscribe; each message carries a CRC32 checksum of the top
+    # ten levels. A heartbeat arrives every second once subscribed.
+    "kraken": Feed(
+        name="kraken",
+        url="wss://ws.kraken.com/v2",
+        subscribe=(
+            '{"method":"subscribe","params":{"channel":"book","symbol":["BTC/USD"],"depth":1000}}',
+        ),
+        reconnect_offset_s=320,
+        ping_interval_s=20,
+        stale_after_s=5,
+    ),
+    # Changes only, with no sequence number and no snapshot on the feed. The
+    # full book is downloaded a few seconds after subscribing (so that changes
+    # are already being recorded when it is taken) and once a minute after
+    # that, giving check points for the rebuilt book. The server pings every
+    # 54 s and drops a client that does not answer; the library answers.
+    "bitstamp": Feed(
+        name="bitstamp",
+        url="wss://ws.bitstamp.net",
+        subscribe=(
+            '{"event":"bts:subscribe","data":{"channel":"diff_order_book_btcusd"}}',
+        ),
+        reconnect_offset_s=340,
+        ping_interval_s=20,
+        stale_after_s=15,
+        reconnect_when=_bitstamp_asks_to_reconnect,
+        rest_snapshot_url="https://www.bitstamp.net/api/v2/order_book/btcusd/",
+        rest_snapshot_after_s=3,
+        rest_snapshot_every_s=60,
+    ),
+    # The current Gemini API (versions 1 and 2 were archived in February 2026).
+    # snapshot=-1 asks for the full book on subscribe. Book messages carry
+    # update numbers U and u for detecting a missed message. depth5 adds a
+    # top-five snapshot every second, which both keeps the line busy and
+    # gives a once-a-second check of the rebuilt book.
+    "gemini": Feed(
+        name="gemini",
+        url="wss://ws.gemini.com/?snapshot=-1",
+        subscribe=(
+            '{"id":"1","method":"subscribe","params":["btcusd@depth@100ms","btcusd@depth5"]}',
+        ),
+        reconnect_offset_s=360,
+        ping_interval_s=20,
+        stale_after_s=10,
+    ),
+    # 50 levels a side is the deepest book offered. Full book on subscribe,
+    # then changes carrying u and pu (the previous u) for detecting a missed
+    # message. The documentation asks for a one-second wait before the first
+    # request. "USD" on this exchange is a combined US dollar and USDC balance.
+    "cryptocom": Feed(
+        name="cryptocom",
+        url="wss://stream.crypto.com/exchange/v1/market",
+        subscribe=(
+            '{"id":1,"method":"subscribe","params":{"channels":["book.BTC_USD.50"],'
+            '"book_subscription_type":"SNAPSHOT_AND_UPDATE","book_update_frequency":100}}',
+        ),
+        reconnect_offset_s=380,
+        ping_interval_s=None,
+        stale_after_s=15,
+        subscribe_delay_s=1.0,
+        reply=_cryptocom_heartbeat_reply,
+    ),
+}

@@ -315,15 +315,19 @@ def test_sends_keepalive_messages_on_schedule(tmp_path):
 
 
 class PretendWebServer:
-    """Serves one fixed text at any address, and counts the requests."""
+    """Serves one fixed text at any address, and counts the requests.
 
-    def __init__(self, body):
+    delay_s makes every answer take that long, like a slow website.
+    """
+
+    def __init__(self, body, delay_s=0.0):
         outer = self
         self.requests = 0
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
                 outer.requests += 1
+                time.sleep(delay_s)
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(body.encode("utf-8"))
@@ -391,6 +395,65 @@ def test_a_failed_download_is_recorded_and_tried_again(tmp_path, monkeypatch):
     labels = summary(records)
     assert labels.count("rest_snapshot_failed") >= 2  # it kept trying
     assert "update" in labels  # and kept recording meanwhile
+
+
+def test_messages_keep_flowing_while_the_full_book_downloads(tmp_path):
+    def script(connection, exchange):
+        exchange.note(connection.recv())
+        for number in range(10):  # one message every 0.1 s, for about a second
+            connection.send(f"update {number}")
+            time.sleep(0.1)
+        for text in connection:
+            exchange.note(text)
+
+    with PretendWebServer("{}", delay_s=0.6) as web, PretendExchange(script) as exchange:
+        feed = feed_for(exchange, rest_snapshot_url=web.url, rest_snapshot_after_s=0.05)
+        with Recording(feed, tmp_path) as recording:
+            wait_for(lambda: web.requests >= 1)
+            time.sleep(1.3)
+
+    (records,) = recording.files()
+    labels = summary(records)
+    snapshot = records[labels.index("rest_snapshot")]
+    stamped_during_download = [
+        r for r in records
+        if "raw" in r and r.get("event") is None
+        and snapshot["requested_wall_ns"] < r["wall_ns"] < snapshot["received_wall_ns"]
+    ]
+    # The download took 0.6 s; messages arriving meanwhile were taken in at
+    # once, not held back until the download finished.
+    assert len(stamped_during_download) >= 3
+    assert snapshot["received_wall_ns"] - snapshot["requested_wall_ns"] >= 0.6 * 10**9
+
+
+def test_connects_with_room_for_a_backlog_and_no_size_limit(tmp_path, monkeypatch):
+    seen = {}
+
+    def pretend_connect(url, **options):
+        seen.update(options)
+        raise OSError("stop here")
+
+    monkeypatch.setattr(recorder, "connect", pretend_connect)
+    feed = Feed(name="pretend", url="ws://unused", subscribe=())
+    with Recording(feed, tmp_path):
+        wait_for(lambda: seen)
+
+    # If the library's waiting room fills, it stops reading the network and
+    # stops answering the exchange's pings, and the exchange hangs up.
+    assert seen["max_queue"] >= 1024
+    assert seen["max_size"] is None  # a full book can be several megabytes
+
+
+def test_reconnects_at_once_when_the_exchange_asks(tmp_path):
+    request = '{"event":"please reconnect"}'
+    with PretendExchange(send_then_wait("book", request), send_then_wait("book")) as exchange:
+        feed = feed_for(exchange, reconnect_when=lambda raw: "please reconnect" in raw)
+        with Recording(feed, tmp_path) as recording:
+            wait_for(lambda: exchange.connections >= 2 and len(exchange.received) >= 2)
+            time.sleep(0.1)
+
+    first = recording.files()[0]
+    assert summary(first) == ["connected", "sent", "book", request, "requested_reconnect"]
 
 
 # --------------------------------------------------------------------------
