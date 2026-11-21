@@ -156,4 +156,35 @@ FEEDS: dict[str, Feed] = {
         subscribe_delay_s=1.0,
         reply=_cryptocom_heartbeat_reply,
     ),
+    # Every message is a full book of up to 200 levels a side, about ten a
+    # second, numbered by sequenceNumberRange so a missed one is detectable.
+    # The far end cuts a connection that carries nothing for 100 s, so the
+    # library's pings stay on as a safeguard for quiet periods.
+    "bullish": Feed(
+        name="bullish",
+        url="wss://api.exchange.bullish.com/trading-api/v1/market-data/orderbook",
+        subscribe=(
+            '{"jsonrpc":"2.0","type":"command","method":"subscribe",'
+            '"params":{"topic":"l2Orderbook","symbol":"BTCUSD"},"id":"1"}',
+        ),
+        reconnect_offset_s=400,
+        ping_interval_s=20,
+        stale_after_s=10,
+    ),
+    # Public data feed: a full book once a second (all levels it publishes,
+    # 19 to 37 a side when checked). No sequence number; each message's
+    # whole-second timestamp rises by exactly one second, so a missed one
+    # shows as a skipped second. The server pings every 3 s and expects an
+    # answer within 1 s, which the library gives. The client must NOT ping
+    # more than once every 30 s or the server closes the connection.
+    "lmax": Feed(
+        name="lmax",
+        url="wss://public-data-api.london-digital.lmax.com/v1/web-socket",
+        subscribe=(
+            '{"type":"SUBSCRIBE","channels":[{"name":"ORDER_BOOK","instruments":["btc-usd"]}]}',
+        ),
+        reconnect_offset_s=420,
+        ping_interval_s=None,
+        stale_after_s=5,
+    ),
 }

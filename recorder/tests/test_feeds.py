@@ -9,7 +9,25 @@ from feeds import FEEDS
 
 
 def test_every_exchange_that_was_verified_is_present():
-    assert {"coinbase", "kraken", "bitstamp", "gemini", "cryptocom"} <= set(FEEDS)
+    assert set(FEEDS) == {
+        "coinbase", "kraken", "bitstamp", "gemini", "cryptocom", "bullish", "lmax"
+    }
+
+
+def test_no_two_exchanges_reconnect_at_the_same_moment():
+    offsets = [feed.reconnect_offset_s for feed in FEEDS.values()]
+    assert len(set(offsets)) == len(offsets)
+
+
+def test_lmax_is_never_pinged_more_than_once_every_30_seconds():
+    # LMAX closes the connection (code 1008) if a client pings more often.
+    ping = FEEDS["lmax"].ping_interval_s
+    assert ping is None or ping >= 30
+
+
+def test_bullish_keeps_pinging_so_a_quiet_line_is_not_cut_after_100_seconds():
+    assert FEEDS["bullish"].ping_interval_s is not None
+    assert FEEDS["bullish"].ping_interval_s < 100
 
 
 @pytest.mark.parametrize("name", sorted(FEEDS))
@@ -70,5 +88,5 @@ def test_gemini_asks_for_a_full_book_on_subscribe():
 
 
 def test_feeds_that_send_their_own_book_do_not_download_one():
-    for name in ("coinbase", "kraken", "gemini", "cryptocom"):
+    for name in ("coinbase", "kraken", "gemini", "cryptocom", "bullish", "lmax"):
         assert FEEDS[name].rest_snapshot_url == ""
