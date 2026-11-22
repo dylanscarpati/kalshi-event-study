@@ -33,6 +33,7 @@ dpkg -s python3-venv >/dev/null 2>&1 || apt-get install -y python3-venv
 [ -x "$app/venv/bin/pip" ] || python3 -m venv --clear "$app/venv"
 "$app/venv/bin/pip" install --quiet -r "$app/recorder/requirements.txt"
 install -m 755 "$src/ops/health.sh" "$app/health.sh"
+install -m 755 "$src/ops/check.sh" "$app/check.sh"
 
 install -m 644 "$src/ops/btc-recorder@.service" /etc/systemd/system/btc-recorder@.service
 systemctl daemon-reload
