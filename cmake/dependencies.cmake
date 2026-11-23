@@ -20,6 +20,14 @@ endfunction()
 # simdjson: JSON parsing. Pinned 2026-11-23.
 fetch_pinned(simdjson https://github.com/simdjson/simdjson.git v3.10.1
              e341c8b43861b43de29c48ab65f292d997096953)
+if(ENGINE_SANITIZE)
+  # simdjson's arm64 indexer writes positions in unrolled groups and computes clz(0) for the
+  # unused slots, whose values are thrown away (write_index in
+  # src/generic/stage1/json_structural_indexer.h). ARM's instruction defines clz(0) as 64, but
+  # the C++ builtin leaves it undefined, so UBSan's "builtin" check stops the run there (seen on
+  # the macOS runner). That one check is turned off for simdjson's own code; ours keeps it.
+  target_compile_options(simdjson PRIVATE -fno-sanitize=builtin)
+endif()
 
 # GoogleTest: unit tests.
 set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
