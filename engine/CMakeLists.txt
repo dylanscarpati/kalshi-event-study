@@ -19,22 +19,33 @@ function(engine_target target)
 endfunction()
 
 # ---------------------------------------------------------------------------------------------
+# The engine library
+# ---------------------------------------------------------------------------------------------
+add_library(engine STATIC
+  src/fixed.cpp)
+target_include_directories(engine PUBLIC src)
+target_link_libraries(engine PUBLIC simdjson::simdjson ZLIB::ZLIB)
+engine_target(engine)
+
+# ---------------------------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------------------------
 include(GoogleTest)
 
-add_executable(engine_tests
-  tests/smoke_test.cpp)
-target_link_libraries(engine_tests PRIVATE simdjson::simdjson ZLIB::ZLIB GTest::gtest_main)
-target_link_libraries(engine_tests PRIVATE engine_options)
+function(engine_test_executable target)
+  add_executable(${target} ${ARGN})
+  target_link_libraries(${target} PRIVATE engine engine_options GTest::gtest_main)
+endfunction()
+
+engine_test_executable(engine_tests
+  tests/smoke_test.cpp
+  tests/fixed_test.cpp)
 gtest_discover_tests(engine_tests)
 
 # A test written before the code it tests goes in tests/red/. Those tests carry the label
 # "red": the dev preset skips them, and CI fails while any remain.
 file(GLOB red_sources CONFIGURE_DEPENDS tests/red/*.cpp)
 if(red_sources)
-  add_executable(engine_red_tests ${red_sources})
-  target_link_libraries(engine_red_tests PRIVATE simdjson::simdjson ZLIB::ZLIB GTest::gtest_main)
-  target_link_libraries(engine_red_tests PRIVATE engine_options)
+  engine_test_executable(engine_red_tests ${red_sources})
   gtest_discover_tests(engine_red_tests PROPERTIES LABELS red)
 endif()
