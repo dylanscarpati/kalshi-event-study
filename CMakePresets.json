@@ -1,0 +1,89 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": { "CMAKE_EXPORT_COMPILE_COMMANDS": "ON" }
+    },
+    {
+      "name": "dev",
+      "inherits": "base",
+      "displayName": "Debug build with sanitizers; warnings are errors",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ENGINE_SANITIZE": "ON",
+        "ENGINE_WERROR": "ON"
+      }
+    },
+    {
+      "name": "release",
+      "inherits": "base",
+      "displayName": "Optimised build with the benchmarks",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ENGINE_BENCHMARKS": "ON"
+      }
+    },
+    {
+      "name": "tidy",
+      "inherits": "base",
+      "displayName": "clang-tidy over the engine's own code",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "ENGINE_CLANG_TIDY": "ON",
+        "ENGINE_WERROR": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "dev", "configurePreset": "dev" },
+    { "name": "release", "configurePreset": "release" },
+    { "name": "tidy", "configurePreset": "tidy" }
+  ],
+  "testPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "output": { "outputOnFailure": true },
+      "filter": { "exclude": { "label": "red" } },
+      "execution": { "noTestsAction": "error" }
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "output": { "outputOnFailure": true },
+      "filter": { "exclude": { "label": "red" } },
+      "execution": { "noTestsAction": "error" }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "dev",
+      "steps": [
+        { "type": "configure", "name": "dev" },
+        { "type": "build", "name": "dev" },
+        { "type": "test", "name": "dev" }
+      ]
+    },
+    {
+      "name": "release",
+      "steps": [
+        { "type": "configure", "name": "release" },
+        { "type": "build", "name": "release" },
+        { "type": "test", "name": "release" }
+      ]
+    },
+    {
+      "name": "tidy",
+      "steps": [
+        { "type": "configure", "name": "tidy" },
+        { "type": "build", "name": "tidy" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  engine:
+    name: engine (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ninja
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            brew install ninja
+          else
+            sudo apt-get update && sudo apt-get install -y ninja-build zlib1g-dev
+          fi
+      - name: Configure, build and test (dev preset, with sanitizers)
+        run: cmake --workflow --preset dev
+      - name: No test is still waiting for its code (label "red")
+        run: |
+          count=$(ctest --test-dir build/dev -N -L red | sed -n 's/^Total Tests: //p')
+          echo "red tests: $count"
+          [ "$count" = 0 ]
+
+  tidy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang clang-tidy zlib1g-dev
+      - name: clang-tidy over the engine's code
+        run: cmake --workflow --preset tidy
+
+  recorder:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -r recorder/requirements.txt "pytest>=8,<9"
+      - name: Recorder tests
+        run: python -m pytest -q

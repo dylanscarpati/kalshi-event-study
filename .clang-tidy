@@ -1,0 +1,29 @@
+# clang-tidy checks for the engine's own code (the tidy preset). Each disabled check is
+# disabled for a stated reason.
+Checks: >
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  misc-*,
+  modernize-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -bugprone-easily-swappable-parameters,
+  -misc-include-cleaner,
+  -misc-non-private-member-variables-in-classes,
+  -modernize-use-trailing-return-type,
+  -modernize-use-nodiscard,
+  -readability-identifier-length,
+  -readability-magic-numbers,
+  -readability-function-cognitive-complexity,
+  -readability-uppercase-literal-suffix
+# easily-swappable-parameters: (price, qty) pairs are the domain; tests cover their order.
+# include-cleaner: noisy with simdjson's single umbrella header.
+# non-private-member-variables: plain structs (Level, Record, Sample) are intended.
+# trailing-return-type, use-nodiscard: style only.
+# identifier-length, magic-numbers: exchange formats are full of fixed constants.
+# function-cognitive-complexity: message parsers are long switch-like functions by nature.
+# uppercase-literal-suffix: style only.
+WarningsAsErrors: "*"
+HeaderFilterRegex: ".*/engine/src/.*"
