@@ -13,6 +13,7 @@ Checks: >
   -misc-include-cleaner,
   -misc-non-private-member-variables-in-classes,
   -modernize-use-trailing-return-type,
+  -portability-avoid-pragma-once,
   -modernize-use-nodiscard,
   -readability-identifier-length,
   -readability-magic-numbers,
@@ -22,6 +23,8 @@ Checks: >
 # include-cleaner: noisy with simdjson's single umbrella header.
 # non-private-member-variables: plain structs (Level, Record, Sample) are intended.
 # trailing-return-type, use-nodiscard: style only.
+# avoid-pragma-once (clang-tidy 21+): every compiler this project uses supports #pragma once,
+#   and it cannot go wrong the way a mistyped include-guard name can.
 # identifier-length, magic-numbers: exchange formats are full of fixed constants.
 # function-cognitive-complexity: message parsers are long switch-like functions by nature.
 # uppercase-literal-suffix: style only.

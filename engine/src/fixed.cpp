@@ -26,7 +26,7 @@ std::optional<Fixed8> parse_fixed8(std::string_view text) {
     if (whole > (kMax - digit) / 10) {  // whole * 10 + digit would not fit
       return std::nullopt;
     }
-    whole = whole * 10 + digit;
+    whole = (whole * 10) + digit;
   }
 
   // The fraction, in units of 10^-8. The first decimal is worth 10^7 units, the eighth 1 unit.
@@ -53,7 +53,7 @@ std::optional<Fixed8> parse_fixed8(std::string_view text) {
   if (whole > (kMax - fraction) / kFixedOne) {  // whole * 10^8 + fraction would not fit
     return std::nullopt;
   }
-  return whole * kFixedOne + fraction;
+  return (whole * kFixedOne) + fraction;
 }
 
 void append_fixed8(std::string& out, Fixed8 value) {
