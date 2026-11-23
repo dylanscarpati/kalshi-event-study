@@ -17,7 +17,9 @@ function(fetch_pinned name repository tag commit)
   endif()
 endfunction()
 
-# simdjson: JSON parsing. Pinned 2026-11-23.
+# simdjson: JSON parsing. Pinned 2026-11-23. The engine is single-threaded, so simdjson's
+# thread support (used only by its multi-document streams) is left out.
+set(SIMDJSON_ENABLE_THREADS OFF CACHE BOOL "" FORCE)
 fetch_pinned(simdjson https://github.com/simdjson/simdjson.git v3.10.1
              e341c8b43861b43de29c48ab65f292d997096953)
 if(ENGINE_SANITIZE)
