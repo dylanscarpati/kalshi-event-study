@@ -24,7 +24,16 @@ endfunction()
 add_library(engine STATIC
   src/fixed.cpp
   src/tape.cpp
-  src/book.cpp)
+  src/book.cpp
+  src/utc_time.cpp
+  src/feed.cpp
+  src/feeds/coinbase.cpp
+  src/feeds/kraken.cpp
+  src/feeds/bitstamp.cpp
+  src/feeds/gemini.cpp
+  src/feeds/cryptocom.cpp
+  src/feeds/bullish.cpp
+  src/feeds/lmax.cpp)
 target_include_directories(engine PUBLIC src)
 target_link_libraries(engine PUBLIC simdjson::simdjson ZLIB::ZLIB)
 engine_target(engine)
@@ -43,7 +52,9 @@ engine_test_executable(engine_tests
   tests/smoke_test.cpp
   tests/fixed_test.cpp
   tests/tape_test.cpp
-  tests/book_test.cpp)
+  tests/book_test.cpp
+  tests/feed_test.cpp
+  tests/feeds_test.cpp)
 gtest_discover_tests(engine_tests)
 
 # A test written before the code it tests goes in tests/red/. Those tests carry the label
