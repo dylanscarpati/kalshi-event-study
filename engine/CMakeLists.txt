@@ -23,7 +23,8 @@ endfunction()
 # ---------------------------------------------------------------------------------------------
 add_library(engine STATIC
   src/fixed.cpp
-  src/tape.cpp)
+  src/tape.cpp
+  src/book.cpp)
 target_include_directories(engine PUBLIC src)
 target_link_libraries(engine PUBLIC simdjson::simdjson ZLIB::ZLIB)
 engine_target(engine)
@@ -41,7 +42,8 @@ endfunction()
 engine_test_executable(engine_tests
   tests/smoke_test.cpp
   tests/fixed_test.cpp
-  tests/tape_test.cpp)
+  tests/tape_test.cpp
+  tests/book_test.cpp)
 gtest_discover_tests(engine_tests)
 
 # A test written before the code it tests goes in tests/red/. Those tests carry the label
