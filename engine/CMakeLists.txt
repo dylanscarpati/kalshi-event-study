@@ -77,3 +77,14 @@ if(red_sources)
   engine_test_executable(engine_red_tests ${red_sources})
   gtest_discover_tests(engine_red_tests PROPERTIES LABELS red)
 endif()
+
+# ---------------------------------------------------------------------------------------------
+# Benchmarks (release preset only): ./build/release/engine/engine_bench
+# ---------------------------------------------------------------------------------------------
+if(ENGINE_BENCHMARKS)
+  add_executable(engine_bench bench/book_bench.cpp bench/replay_bench.cpp)
+  target_link_libraries(engine_bench PRIVATE engine benchmark::benchmark_main)
+  target_compile_definitions(engine_bench PRIVATE
+    ENGINE_TEST_TAPES="${CMAKE_CURRENT_SOURCE_DIR}/tests/tapes")
+  engine_target(engine_bench)
+endif()
