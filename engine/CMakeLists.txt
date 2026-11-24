@@ -33,10 +33,17 @@ add_library(engine STATIC
   src/feeds/gemini.cpp
   src/feeds/cryptocom.cpp
   src/feeds/bullish.cpp
-  src/feeds/lmax.cpp)
+  src/feeds/lmax.cpp
+  src/replay.cpp
+  src/csv.cpp)
 target_include_directories(engine PUBLIC src)
 target_link_libraries(engine PUBLIC simdjson::simdjson ZLIB::ZLIB)
 engine_target(engine)
+
+# The command that replays a data folder (see the comment at the top of apps/replay.cpp).
+add_executable(replay apps/replay.cpp)
+target_link_libraries(replay PRIVATE engine)
+engine_target(replay)
 
 # ---------------------------------------------------------------------------------------------
 # Tests
@@ -54,7 +61,8 @@ engine_test_executable(engine_tests
   tests/tape_test.cpp
   tests/book_test.cpp
   tests/feed_test.cpp
-  tests/feeds_test.cpp)
+  tests/feeds_test.cpp
+  tests/replay_test.cpp)
 gtest_discover_tests(engine_tests)
 
 # A test written before the code it tests goes in tests/red/. Those tests carry the label
