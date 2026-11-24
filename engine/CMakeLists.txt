@@ -35,7 +35,8 @@ add_library(engine STATIC
   src/feeds/bullish.cpp
   src/feeds/lmax.cpp
   src/replay.cpp
-  src/csv.cpp)
+  src/csv.cpp
+  src/file_json.cpp)
 target_include_directories(engine PUBLIC src)
 target_link_libraries(engine PUBLIC simdjson::simdjson ZLIB::ZLIB)
 engine_target(engine)
@@ -62,7 +63,11 @@ engine_test_executable(engine_tests
   tests/book_test.cpp
   tests/feed_test.cpp
   tests/feeds_test.cpp
-  tests/replay_test.cpp)
+  tests/replay_test.cpp
+  tests/golden_test.cpp)
+# The golden test reads the synthetic tapes written by tests/make_tapes.py.
+target_compile_definitions(engine_tests PRIVATE
+  ENGINE_TEST_TAPES="${CMAKE_CURRENT_SOURCE_DIR}/tests/tapes")
 gtest_discover_tests(engine_tests)
 
 # A test written before the code it tests goes in tests/red/. Those tests carry the label

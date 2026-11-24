@@ -8,3 +8,5 @@ build/
 data/
 *.jsonl
 *.jsonl.gz
+# ...except the synthetic test tapes written by engine/tests/make_tapes.py, which CI checks
+!engine/tests/tapes/**/*.jsonl.gz
