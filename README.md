@@ -21,9 +21,14 @@ Recordings are checked daily for integrity breaks and for coverage of the measur
 | Path | Contents |
 |---|---|
 | `recorder/` | Capture, file format and integrity checker, with tests against simulated exchanges |
+| `engine/` | C++20 order-book reconstruction for all seven exchanges, sampled every second; integrity checks match the recorder's checker, and output is tested byte for byte against synthetic tapes |
 | `ops/` | Server deployment, health report, daily check |
 
 ```bash
+cmake --workflow --preset dev    # engine: build and test (CMake 3.25+, Ninja, zlib)
+```
+
+```bash
 python3 -m venv .venv && .venv/bin/pip install "websockets==15.0.1" "pytest>=8,<9"
-.venv/bin/python -m pytest -q
+.venv/bin/python -m pytest -q    # recorder
 ```
