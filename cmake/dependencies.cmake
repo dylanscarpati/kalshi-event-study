@@ -20,6 +20,16 @@ endfunction()
 # simdjson: JSON parsing. Pinned 2026-11-23. The engine is single-threaded, so simdjson's
 # thread support (used only by its multi-document streams) is left out.
 set(SIMDJSON_ENABLE_THREADS OFF CACHE BOOL "" FORCE)
+# simdjson switches on its development checks, which add members to some of its classes, in
+# every file compiled without optimisation, and compiles its own code with -Og in Debug builds.
+# Left alone, a Debug build would hold two layouts of the same class. The choice is therefore
+# made once for every file: on in Debug builds, where they also catch wrong use of simdjson's
+# interface, and off otherwise (optimised files leave them off by themselves).
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  set(SIMDJSON_DEVELOPMENT_CHECKS ON CACHE BOOL "" FORCE)
+else()
+  set(SIMDJSON_DEVELOPMENT_CHECKS OFF CACHE BOOL "" FORCE)
+endif()
 fetch_pinned(simdjson https://github.com/simdjson/simdjson.git v3.10.1
              e341c8b43861b43de29c48ab65f292d997096953)
 if(ENGINE_SANITIZE)
