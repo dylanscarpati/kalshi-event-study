@@ -19,11 +19,12 @@ class Coinbase final : public Feed {
       return;  // check.py ignores a message without one
     }
     const std::int64_t sequence = number->get_int64();
+    const std::int64_t next = checked_add(sequence, 1);  // first, so an overflow is one break
     if (sequence != expected_) {
       broken(wall_ns, "sequence number " + std::to_string(expected_) + " expected, " +
                           std::to_string(sequence) + " received");
     }
-    expected_ = sequence + 1;
+    expected_ = next;
 
     const std::string_view channel = doc["channel"];
     if (channel != "l2_data") {

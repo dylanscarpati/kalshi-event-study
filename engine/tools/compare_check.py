@@ -7,6 +7,11 @@ The engine mirrors check.py's checks, so for every file the two must agree on wh
 was ready, when it was spoiled, the moments of missed full books, how the connection ended, the
 number of problems, and every count check.py keeps (the engine keeps more). Exit code 0 means
 they agree on every file; 1 lists the differences.
+
+The engine is deliberately stricter in two ways. These are listed, but do not fail the run:
+- Bitstamp: its book is ready only once a download can be brought up to date. check.py calls it
+  ready at the first download, usable or not.
+- Gemini: a first update that is not a full book (U differs from u) is a break.
 """
 
 from __future__ import annotations
@@ -22,6 +27,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "recorder"))
 
 from check import CHECKS, UNPLANNED_ENDINGS, check_file  # noqa: E402
+
+FIRST_NOT_FULL = "the first update is not a full book"
 
 
 def engine_results(replay: Path, data_dir: Path) -> dict[tuple[str, str], dict]:
@@ -39,6 +46,21 @@ def engine_results(replay: Path, data_dir: Path) -> dict[tuple[str, str], dict]:
     return {(r["feed"], r["file"]): r for r in map(json.loads, lines)}
 
 
+def stricter(feed: str, python, cpp: dict, pairs: dict) -> list[tuple[str, str]]:
+    """The compared fields that differ only because of the engine's two stricter rules."""
+    found = []
+    want, have = pairs["ready_ns"]
+    if feed == "bitstamp" and want is not None and (have is None or have > want):
+        found.append(("ready_ns", "waits for a download it can bring up to date"))
+    if feed == "gemini":
+        extra = [w for w, text in cpp["problems"] if text.startswith(FIRST_NOT_FULL)]
+        if extra and len(cpp["problems"]) - len(extra) == len(python.problems):
+            found.append(("problems", "the first update is not a full book"))
+            if python.invalid_from_ns is None and cpp["invalid_from_ns"] == extra[0]:
+                found.append(("invalid_from_ns", "the first update is not a full book"))
+    return found
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--data-dir", type=Path, required=True)
@@ -48,6 +70,7 @@ def main() -> int:
     engine = engine_results(args.replay, args.data_dir)
     compared = 0
     differences: list[str] = []
+    notes: list[str] = []
     for feed in sorted(CHECKS):
         everything = sorted((args.data_dir / feed).glob("*/*.jsonl.gz"))
         for path in everything:
@@ -69,15 +92,21 @@ def main() -> int:
             }
             for name, value in python.counts.items():
                 pairs[f"counts.{name}"] = (value, cpp["counts"].get(name, 0))
+            for name, reason in stricter(feed, python, cpp, pairs):
+                del pairs[name]
+                notes.append(f"{path.name}: {name}: engine stricter ({reason})")
             for name, (want, have) in pairs.items():
                 if want != have:
                     differences.append(
                         f"{path.name}: {name}: check.py {want}, engine {have}"
                     )
 
-    for line in differences:
+    for line in notes + differences:
         print(line)
-    print(f"{compared} file(s) compared, {len(differences)} difference(s)")
+    summary = f"{compared} file(s) compared, {len(differences)} difference(s)"
+    if notes:
+        summary += f", {len(notes)} where the engine is stricter"
+    print(summary)
     return 1 if differences or compared == 0 else 0
 
 

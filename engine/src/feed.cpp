@@ -159,6 +159,22 @@ std::optional<std::string_view> find_string(simdjson::ondemand::document& doc,
   return std::string_view(value->get_string());
 }
 
+std::int64_t checked_mul(std::int64_t a, std::int64_t b) {
+  std::int64_t result = 0;
+  if (__builtin_mul_overflow(a, b, &result)) {
+    throw BadMessage("a number too large: " + std::to_string(a) + " * " + std::to_string(b));
+  }
+  return result;
+}
+
+std::int64_t checked_add(std::int64_t a, std::int64_t b) {
+  std::int64_t result = 0;
+  if (__builtin_add_overflow(a, b, &result)) {
+    throw BadMessage("a number too large: " + std::to_string(a) + " + " + std::to_string(b));
+  }
+  return result;
+}
+
 Fixed8 decimal(simdjson::ondemand::value value) {
   std::string_view text;
   const simdjson::ondemand::json_type type = value.type();

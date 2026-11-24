@@ -132,6 +132,9 @@ std::optional<simdjson::ondemand::value> find(simdjson::ondemand::document& doc,
 // The same for a field holding text.
 std::optional<std::string_view> find_string(simdjson::ondemand::document& doc,
                                             std::string_view key);
+// a * b and a + b for integers from an exchange; BadMessage if the result does not fit.
+std::int64_t checked_mul(std::int64_t a, std::int64_t b);
+std::int64_t checked_add(std::int64_t a, std::int64_t b);
 // A decimal written as a JSON string ("57748.12") or a JSON number (57748.1), read exactly.
 Fixed8 decimal(simdjson::ondemand::value value);
 // A whole number written as a JSON string ("1795248341205038").

@@ -72,7 +72,7 @@ class Cryptocom final : public Feed {
       }
     }
     last_u_ = data["u"].get_int64();
-    applied(wall_ns, data["t"].get_int64() * 1'000'000);  // t is in milliseconds
+    applied(wall_ns, checked_mul(data["t"].get_int64(), 1'000'000));  // t is in milliseconds
   }
 
   void on_event(std::int64_t /*wall_ns*/, std::string_view kind,

@@ -32,13 +32,14 @@ class Bullish final : public Feed {
     if (count != 2) {
       throw BadMessage("sequenceNumberRange does not hold two numbers");
     }
-    if (last_upper_ && lower != *last_upper_ + 1) {
+    if (last_upper_ && lower != checked_add(*last_upper_, 1)) {
       broken(wall_ns, "sequence numbers " + std::to_string(*last_upper_ + 1) + " to " +
                           std::to_string(lower - 1) + " missing");
     }
     last_upper_ = upper;
 
-    const std::int64_t exchange_ns = integer_in_string(data["timestamp"]) * 1'000'000;  // ms
+    const std::int64_t exchange_ns =
+        checked_mul(integer_in_string(data["timestamp"]), 1'000'000);  // ms
     read_flat_levels(data["bids"], bids_scratch_);
     read_flat_levels(data["asks"], asks_scratch_);
     book_.bids.assign(bids_scratch_);

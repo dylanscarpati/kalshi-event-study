@@ -18,6 +18,7 @@
 //    likeliest phantoms of all. Every difference is counted, as Bitstamp's integrity evidence.
 #include <algorithm>
 #include <deque>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -71,10 +72,18 @@ class Bitstamp final : public Feed {
     if (!first_micro_) {
       first_micro_ = change.micro;
     }
+    if (!have_book_) {  // remembered until the first download is spliced
+      for (const Level& level : change.bids) {
+        last_bids_[level.price] = level.qty;
+      }
+      for (const Level& level : change.asks) {
+        last_asks_[level.price] = level.qty;
+      }
+    }
 
     if (have_book_) {
       apply(change);
-      applied(wall_ns, change.micro * 1'000);
+      applied(wall_ns, checked_mul(change.micro, 1'000));
     }
     changes_.push_back(std::move(change));
     while (changes_.front().micro < changes_.back().micro - kKeepUs) {
@@ -124,22 +133,30 @@ class Bitstamp final : public Feed {
   void splice(std::int64_t wall_ns, const Download& download) {
     book_.bids.assign(download.bids);
     book_.asks.assign(download.asks);
-    unconfirmed_bids_ = prices_of(book_.bids);
-    unconfirmed_asks_ = prices_of(book_.asks);
+    unconfirmed_bids_ = unconfirmed_of(book_.bids, last_bids_);
+    unconfirmed_asks_ = unconfirmed_of(book_.asks, last_asks_);
     for (const Change& change : changes_) {
       if (change.micro > download.micro) {
         apply(change);
       }
     }
     have_book_ = true;
+    last_bids_.clear();
+    last_asks_.clear();
     ready(wall_ns);
-    applied(wall_ns, changes_.back().micro * 1'000);
+    applied(wall_ns, checked_mul(changes_.back().micro, 1'000));
   }
 
-  static std::set<Fixed8> prices_of(const Side& side) {
+  // The downloaded levels that no change has confirmed: those whose latest change, if any, did
+  // not set a size.
+  static std::set<Fixed8> unconfirmed_of(const Side& side, const std::map<Fixed8, Fixed8>& last) {
     std::set<Fixed8> prices;
     for (std::size_t i = 0; i < side.size(); ++i) {
-      prices.insert(side.level(i).price);
+      const Fixed8 price = side.level(i).price;
+      const auto found = last.find(price);
+      if (found == last.end() || found->second == 0) {
+        prices.insert(price);
+      }
     }
     return prices;
   }
@@ -241,6 +258,9 @@ class Bitstamp final : public Feed {
   // Prices that came from a download and that no change has set since.
   std::set<Fixed8> unconfirmed_bids_;
   std::set<Fixed8> unconfirmed_asks_;
+  // Before the first splice: the latest size each change set at each price.
+  std::map<Fixed8, Fixed8> last_bids_;
+  std::map<Fixed8, Fixed8> last_asks_;
 };
 
 }  // namespace

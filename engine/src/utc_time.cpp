@@ -32,8 +32,9 @@ std::optional<std::int64_t> parse_utc_ns(std::string_view text) {
   const int hour = digits_at(text, 11, 2);
   const int minute = digits_at(text, 14, 2);
   const int second = digits_at(text, 17, 2);
-  if (year < 0 || month < 0 || day < 0 || hour < 0 || hour > 23 || minute < 0 || minute > 59 ||
-      second < 0 || second > 59) {
+  // Years whose nanosecond count fits in int64 with room to spare (it overflows in 2262).
+  if (year < 1970 || year > 2200 || month < 0 || day < 0 || hour < 0 || hour > 23 || minute < 0 ||
+      minute > 59 || second < 0 || second > 59) {
     return std::nullopt;
   }
   const std::chrono::year_month_day date{std::chrono::year{year},

@@ -191,7 +191,11 @@ class Replay::Cursor {
     reading_->finish(!reader_->complete() && !newest);
     summaries_.push_back({name_, files_[next_file_ - 1].filename().string(), reading_->integrity(),
                           reader_->complete(), reader_->damaged()});
-    finished_ = std::move(reading_);
+    // A file with no records (a crash before the recorder's first flush) changes nothing shown.
+    if (reading_started_) {
+      finished_ = std::move(reading_);
+    }
+    reading_.reset();
     reader_.reset();
     reading_started_ = false;
   }
